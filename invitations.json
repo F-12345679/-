@@ -1,0 +1,35 @@
+{
+  "next_seq": 3,
+  "invitations": {
+    "IV001": {
+      "invitation_id": "IV001",
+      "from_intent": "I005",
+      "to_intent": "I003",
+      "from_user": "U001",
+      "to_user": "U003",
+      "status": "accepted",
+      "team_confirm": {
+        "U001": true,
+        "U003": true
+      },
+      "created_at": "2026-10-31 16:30:18",
+      "updated_at": "2026-10-31 21:15:39"
+    },
+    "IV002": {
+      "invitation_id": "IV002",
+      "from_intent": "I006",
+      "to_intent": "I003",
+      "from_user": "U005",
+      "to_user": "U003",
+      "status": "cancelled",
+      "team_confirm": {
+        "U005": true,
+        "U003": true
+      },
+      "created_at": "2026-11-01 15:10:53",
+      "updated_at": "2026-11-01 15:22:41",
+      "message": "看看",
+      "_notified": true
+    }
+  }
+}

@@ -1,0 +1,206 @@
+{
+  "next_seq": 7,
+  "intents": {
+    "I001": {
+      "intent_id": "I001",
+      "user_id": "U001",
+      "competition": "大创赛",
+      "is_innovation": true,
+      "skills": [
+        "Python",
+        "算法",
+        "数据清洗"
+      ],
+      "wanted_skills": [
+        "文档写作",
+        "PPT",
+        "产品设计"
+      ],
+      "team_size": 2,
+      "available_period": {
+        "raw": "这个学期",
+        "start_date": "2026-10-31",
+        "end_date": "2027-02-28"
+      },
+      "preferred_role": "算法与数据分析",
+      "has_idea": true,
+      "willing_offline": true,
+      "competition_range": null,
+      "status": "matching",
+      "team_confirmed": false,
+      "created_at": "2026-10-31 15:35:29",
+      "updated_at": "2026-10-31 15:35:37",
+      "last_reminded_at": "2026-10-31 15:35:37",
+      "last_reminded_response_at": null,
+      "excluded_reason": null
+    },
+    "I002": {
+      "intent_id": "I002",
+      "user_id": "U002",
+      "competition": "大创赛",
+      "is_innovation": true,
+      "skills": [
+        "文档写作",
+        "PPT",
+        "项目管理"
+      ],
+      "wanted_skills": [
+        "Python",
+        "算法",
+        "数据分析"
+      ],
+      "team_size": 1,
+      "available_period": {
+        "raw": "这个学期",
+        "start_date": "2026-10-31",
+        "end_date": "2027-02-28"
+      },
+      "preferred_role": "文档与汇报",
+      "has_idea": false,
+      "willing_offline": true,
+      "competition_range": null,
+      "status": "matching",
+      "team_confirmed": false,
+      "created_at": "2026-10-31 15:35:29",
+      "updated_at": "2026-10-31 15:35:37",
+      "last_reminded_at": "2026-10-31 15:35:37",
+      "last_reminded_response_at": null,
+      "excluded_reason": null
+    },
+    "I003": {
+      "intent_id": "I003",
+      "user_id": "U003",
+      "competition": "挑战杯",
+      "is_innovation": true,
+      "skills": [
+        "Java",
+        "Spring Boot",
+        "数据库"
+      ],
+      "wanted_skills": [
+        "前端",
+        "UI设计"
+      ],
+      "team_size": 2,
+      "available_period": {
+        "raw": "接下来三个月",
+        "start_date": "2026-10-31",
+        "end_date": "2027-02-28"
+      },
+      "preferred_role": "后端开发",
+      "has_idea": true,
+      "willing_offline": false,
+      "competition_range": null,
+      "status": "matching",
+      "team_confirmed": false,
+      "created_at": "2026-10-31 15:35:29",
+      "updated_at": "2026-11-01 15:22:41",
+      "last_reminded_at": "2026-10-31 15:35:37",
+      "last_reminded_response_at": "2026-10-31 16:58:50",
+      "excluded_reason": null
+    },
+    "I004": {
+      "intent_id": "I004",
+      "user_id": "U004",
+      "competition": "互联网+",
+      "is_innovation": true,
+      "skills": [
+        "UI设计",
+        "Figma",
+        "PPT"
+      ],
+      "wanted_skills": [
+        "前端",
+        "后端",
+        "产品经理"
+      ],
+      "team_size": 2,
+      "available_period": {
+        "raw": "这个学期",
+        "start_date": "2026-10-31",
+        "end_date": "2027-02-28"
+      },
+      "preferred_role": "UI设计",
+      "has_idea": false,
+      "willing_offline": true,
+      "competition_range": null,
+      "status": "matching",
+      "team_confirmed": false,
+      "created_at": "2026-10-31 15:35:29",
+      "updated_at": "2026-10-31 15:35:37",
+      "last_reminded_at": "2026-10-31 15:35:37",
+      "last_reminded_response_at": null,
+      "excluded_reason": null
+    },
+    "I005": {
+      "intent_id": "I005",
+      "user_id": "U001",
+      "competition": "互联网+",
+      "is_innovation": true,
+      "skills": [
+        "python"
+      ],
+      "wanted_skills": [
+        "文档写作"
+      ],
+      "team_size": 1,
+      "available_period": {
+        "raw": "这周内",
+        "start_date": "2026-10-31",
+        "end_date": "2027-01-15"
+      },
+      "preferred_role": "",
+      "has_idea": null,
+      "willing_offline": null,
+      "competition_range": {
+        "min": 3,
+        "max": 15,
+        "source": "table",
+        "name": "互联网+",
+        "matched_name": "互联网+"
+      },
+      "status": "matching",
+      "team_confirmed": true,
+      "created_at": "2026-10-31 16:28:56",
+      "updated_at": "2026-11-01 00:45:43",
+      "last_reminded_at": "2026-10-31 16:58:42",
+      "last_reminded_response_at": null,
+      "excluded_reason": null
+    },
+    "I006": {
+      "intent_id": "I006",
+      "user_id": "U005",
+      "competition": "中国国际大学生创新大赛（2026）",
+      "is_innovation": true,
+      "skills": [
+        "C语言"
+      ],
+      "wanted_skills": [
+        "摸鱼"
+      ],
+      "team_size": 1,
+      "available_period": {
+        "raw": "12.1到12.8",
+        "start_date": "2026-12-01",
+        "end_date": "2026-12-08"
+      },
+      "preferred_role": "",
+      "has_idea": null,
+      "willing_offline": null,
+      "competition_range": {
+        "min": 3,
+        "max": 15,
+        "source": "table",
+        "name": "中国国际大学生创新大赛（2026）",
+        "matched_name": "中国国际大学生创新大赛（2026）"
+      },
+      "status": "matching",
+      "team_confirmed": false,
+      "created_at": "2026-11-01 15:04:24",
+      "updated_at": "2026-11-01 15:04:24",
+      "last_reminded_at": null,
+      "last_reminded_response_at": null,
+      "excluded_reason": null
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "next_seq": 2,
+  "messages": {
+    "I003|I005": [
+      {
+        "message_id": "M0001",
+        "from_user": "U003",
+        "text": "莫西",
+        "created_at": "2026-10-31 16:30:38"
+      }
+    ]
+  }
+}

@@ -1,0 +1,268 @@
+{
+  "next_group_seq": 2,
+  "next_notification_seq": 7,
+  "next_feedback_seq": 1,
+  "next_team_seq": 2,
+  "next_group_message_seq": 2,
+  "admins": [
+    "U005"
+  ],
+  "admin_invites": {},
+  "friends": {
+    "U005": [
+      "U003"
+    ],
+    "U003": [
+      "U005"
+    ]
+  },
+  "groups": {
+    "G001": {
+      "group_id": "G001",
+      "name": "组队群聊",
+      "competition": "中国国际大学生创新大赛（2026）",
+      "owner": "U003",
+      "members": [
+        "U003",
+        "U005",
+        "U001"
+      ],
+      "messages": [
+        {
+          "message_id": "GM0001",
+          "from_user": "U003",
+          "text": "mxmx",
+          "created_at": "2026-11-01 15:19:30"
+        }
+      ],
+      "created_at": "2026-11-01 15:19:15"
+    }
+  },
+  "notifications": {
+    "U003": [
+      {
+        "notification_id": "N0001",
+        "text": "『吃货』向你发送了组队邀请，可前往“邀请与沟通”查看。",
+        "kind": "invite",
+        "meta": {
+          "invitation_id": "IV002"
+        },
+        "read": true,
+        "created_at": "2026-11-01 15:10:54"
+      },
+      {
+        "notification_id": "N0003",
+        "text": "『挑战杯』比赛最低参赛人数已满，您是否还需要继续匹配更多队友？",
+        "kind": "min_confirm",
+        "meta": {
+          "intent_id": "I003",
+          "competition": "挑战杯",
+          "count": 3,
+          "min": 3,
+          "max": 15
+        },
+        "read": true,
+        "created_at": "2026-11-01 15:17:42"
+      }
+    ],
+    "U005": [
+      {
+        "notification_id": "N0002",
+        "text": "『老周』已同意你的邀请，你们已正式组队并成为好友。",
+        "kind": "team_accepted",
+        "meta": {
+          "invitation_id": "IV002"
+        },
+        "read": true,
+        "created_at": "2026-11-01 15:17:42"
+      },
+      {
+        "notification_id": "N0004",
+        "text": "你被邀请加入了群聊「组队群聊」。",
+        "kind": "group_created",
+        "meta": {
+          "group_id": "G001"
+        },
+        "read": true,
+        "created_at": "2026-11-01 15:19:15"
+      },
+      {
+        "notification_id": "N0006",
+        "text": "与『老周』的组队已解散。",
+        "kind": "team_cancelled",
+        "meta": {
+          "invitation_id": "IV002"
+        },
+        "read": true,
+        "created_at": "2026-11-01 15:22:41"
+      }
+    ],
+    "U001": [
+      {
+        "notification_id": "N0005",
+        "text": "你被邀请加入了群聊「组队群聊」。",
+        "kind": "group_created",
+        "meta": {
+          "group_id": "G001"
+        },
+        "read": false,
+        "created_at": "2026-11-01 15:19:15"
+      }
+    ]
+  },
+  "feedback": {},
+  "members": {
+    "I006": [],
+    "I003": []
+  },
+  "team_links": [
+    {
+      "link_id": "T0001",
+      "invitation_id": "IV002",
+      "user_a": "U005",
+      "user_b": "U003",
+      "intent_a": "I006",
+      "intent_b": "I003",
+      "competition": "中国国际大学生创新大赛（2026）",
+      "active": false,
+      "created_at": "2026-11-01 15:17:42",
+      "cancelled_at": "2026-11-01 15:22:41"
+    }
+  ],
+  "snapshots": {
+    "I003": {
+      "saved_at": "2026-11-01 00:28:20",
+      "candidates": [
+        {
+          "intent_id": "I004",
+          "user_id": "U004",
+          "score": 27.4,
+          "nickname": "小夏",
+          "competition": "互联网+"
+        },
+        {
+          "intent_id": "I001",
+          "user_id": "U001",
+          "score": 17.6,
+          "nickname": "小林",
+          "competition": "大创赛"
+        },
+        {
+          "intent_id": "I002",
+          "user_id": "U002",
+          "score": 16.2,
+          "nickname": "阿May",
+          "competition": "大创赛"
+        }
+      ]
+    },
+    "I001": {
+      "saved_at": "2026-11-01 00:45:34",
+      "candidates": [
+        {
+          "intent_id": "I002",
+          "user_id": "U002",
+          "score": 54.7,
+          "nickname": "阿May",
+          "competition": "大创赛"
+        },
+        {
+          "intent_id": "I004",
+          "user_id": "U004",
+          "score": 31.1,
+          "nickname": "小夏",
+          "competition": "互联网+"
+        },
+        {
+          "intent_id": "I003",
+          "user_id": "U003",
+          "score": 17.6,
+          "nickname": "老周",
+          "competition": "挑战杯"
+        }
+      ]
+    },
+    "I005": {
+      "saved_at": "2026-11-01 00:45:43",
+      "candidates": [
+        {
+          "intent_id": "I003",
+          "user_id": "U003",
+          "score": 13.2,
+          "nickname": "老周",
+          "competition": "挑战杯"
+        },
+        {
+          "intent_id": "I004",
+          "user_id": "U004",
+          "score": 13.2,
+          "nickname": "小夏",
+          "competition": "互联网+"
+        }
+      ]
+    },
+    "I006": {
+      "saved_at": "2026-11-01 15:04:24",
+      "candidates": [
+        {
+          "intent_id": "I001",
+          "user_id": "U001",
+          "score": 18.2,
+          "nickname": "小林",
+          "competition": "大创赛"
+        },
+        {
+          "intent_id": "I003",
+          "user_id": "U003",
+          "score": 10.9,
+          "nickname": "老周",
+          "competition": "挑战杯"
+        },
+        {
+          "intent_id": "I004",
+          "user_id": "U004",
+          "score": 10.9,
+          "nickname": "小夏",
+          "competition": "互联网+"
+        }
+      ]
+    }
+  },
+  "reads": {
+    "U005": {
+      "invitations": [],
+      "messages": {},
+      "groups": {
+        "G001": "2026-11-01 15:19:30"
+      },
+      "history": {}
+    },
+    "U003": {
+      "invitations": [
+        "IV002"
+      ],
+      "messages": {
+        "I003|I005": "2026-10-31 16:30:38"
+      },
+      "groups": {
+        "G001": "2026-11-01 15:19:30"
+      },
+      "history": {
+        "I003": 2
+      }
+    },
+    "U001": {
+      "invitations": [],
+      "messages": {
+        "I003|I005": "2026-10-31 16:30:38"
+      },
+      "groups": {},
+      "history": {
+        "I001": 0,
+        "I005": 0
+      }
+    }
+  },
+  "min_prompted": {},
+  "deleted_users": []
+}
