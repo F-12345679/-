@@ -1,5 +1,5 @@
 {
-  "next_seq": 7,
+  "next_seq": 12,
   "intents": {
     "I001": {
       "intent_id": "I001",
@@ -198,6 +198,196 @@
       "team_confirmed": false,
       "created_at": "2026-11-01 15:04:24",
       "updated_at": "2026-11-01 15:04:24",
+      "last_reminded_at": null,
+      "last_reminded_response_at": null,
+      "excluded_reason": null
+    },
+    "I007": {
+      "intent_id": "I007",
+      "user_id": "U006",
+      "competition": "中国国际大学生创新大赛（2026）",
+      "is_innovation": true,
+      "skills": [
+        "C++",
+        "前端开发",
+        "项目管理"
+      ],
+      "wanted_skills": [
+        "Python",
+        "文档写作"
+      ],
+      "team_size": 2,
+      "available_period": {
+        "raw": "这个学期",
+        "start_date": "2026-11-05",
+        "end_date": "2027-01-15"
+      },
+      "preferred_role": "项目管理",
+      "has_idea": false,
+      "willing_offline": false,
+      "competition_range": {
+        "min": 3,
+        "max": 15,
+        "source": "table",
+        "name": "中国国际大学生创新大赛（2026）",
+        "matched_name": "中国国际大学生创新大赛（2026）"
+      },
+      "status": "matching",
+      "team_confirmed": false,
+      "created_at": "2026-11-05 15:19:11",
+      "updated_at": "2026-11-05 15:19:11",
+      "last_reminded_at": null,
+      "last_reminded_response_at": null,
+      "excluded_reason": null
+    },
+    "I008": {
+      "intent_id": "I008",
+      "user_id": "U007",
+      "competition": "中国国际大学生创新大赛（2026）",
+      "is_innovation": true,
+      "skills": [
+        "Java",
+        "文档写作",
+        "算法设计"
+      ],
+      "wanted_skills": [
+        "商业策划",
+        "视频剪辑"
+      ],
+      "team_size": 2,
+      "available_period": {
+        "raw": "这个学期",
+        "start_date": "2026-11-05",
+        "end_date": "2027-01-15"
+      },
+      "preferred_role": "商业策划",
+      "has_idea": true,
+      "willing_offline": true,
+      "competition_range": {
+        "min": 3,
+        "max": 15,
+        "source": "table",
+        "name": "中国国际大学生创新大赛（2026）",
+        "matched_name": "中国国际大学生创新大赛（2026）"
+      },
+      "status": "matching",
+      "team_confirmed": false,
+      "created_at": "2026-11-05 15:19:11",
+      "updated_at": "2026-11-05 15:19:11",
+      "last_reminded_at": null,
+      "last_reminded_response_at": null,
+      "excluded_reason": null
+    },
+    "I009": {
+      "intent_id": "I009",
+      "user_id": "U008",
+      "competition": "中国国际大学生创新大赛（2026）",
+      "is_innovation": true,
+      "skills": [
+        "机器学习",
+        "视频剪辑",
+        "Java"
+      ],
+      "wanted_skills": [
+        "数学建模",
+        "嵌入式开发"
+      ],
+      "team_size": 2,
+      "available_period": {
+        "raw": "这个学期",
+        "start_date": "2026-11-05",
+        "end_date": "2027-01-15"
+      },
+      "preferred_role": "UI/视觉设计",
+      "has_idea": false,
+      "willing_offline": true,
+      "competition_range": {
+        "min": 3,
+        "max": 15,
+        "source": "table",
+        "name": "中国国际大学生创新大赛（2026）",
+        "matched_name": "中国国际大学生创新大赛（2026）"
+      },
+      "status": "matching",
+      "team_confirmed": false,
+      "created_at": "2026-11-05 15:19:11",
+      "updated_at": "2026-11-05 15:19:11",
+      "last_reminded_at": null,
+      "last_reminded_response_at": null,
+      "excluded_reason": null
+    },
+    "I010": {
+      "intent_id": "I010",
+      "user_id": "U009",
+      "competition": "“挑战杯”中国大学生创业计划竞赛",
+      "is_innovation": true,
+      "skills": [
+        "文档写作",
+        "Python",
+        "市场调研"
+      ],
+      "wanted_skills": [
+        "商业策划",
+        "算法设计"
+      ],
+      "team_size": 2,
+      "available_period": {
+        "raw": "这个学期",
+        "start_date": "2026-11-05",
+        "end_date": "2027-01-15"
+      },
+      "preferred_role": "项目管理",
+      "has_idea": true,
+      "willing_offline": false,
+      "competition_range": {
+        "min": 3,
+        "max": 15,
+        "source": "table",
+        "name": "“挑战杯”中国大学生创业计划竞赛",
+        "matched_name": "“挑战杯”中国大学生创业计划竞赛"
+      },
+      "status": "matching",
+      "team_confirmed": false,
+      "created_at": "2026-11-05 15:19:11",
+      "updated_at": "2026-11-05 15:19:11",
+      "last_reminded_at": null,
+      "last_reminded_response_at": null,
+      "excluded_reason": null
+    },
+    "I011": {
+      "intent_id": "I011",
+      "user_id": "U010",
+      "competition": "全国大学生数学建模竞赛",
+      "is_innovation": true,
+      "skills": [
+        "商业策划",
+        "机器学习",
+        "Python"
+      ],
+      "wanted_skills": [
+        "数学建模",
+        "嵌入式开发"
+      ],
+      "team_size": 2,
+      "available_period": {
+        "raw": "这个学期",
+        "start_date": "2026-11-05",
+        "end_date": "2027-01-15"
+      },
+      "preferred_role": "前端开发",
+      "has_idea": true,
+      "willing_offline": false,
+      "competition_range": {
+        "min": 3,
+        "max": 3,
+        "source": "table",
+        "name": "全国大学生数学建模竞赛",
+        "matched_name": "全国大学生数学建模竞赛"
+      },
+      "status": "matching",
+      "team_confirmed": false,
+      "created_at": "2026-11-05 15:19:11",
+      "updated_at": "2026-11-05 15:19:11",
       "last_reminded_at": null,
       "last_reminded_response_at": null,
       "excluded_reason": null

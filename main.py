@@ -508,6 +508,10 @@ def _render_voice_mic(height: int = 2) -> None:
     components.html(template, height=height)
 
 
+def _render_page_summary(text: str) -> None:
+    st.markdown(f'<div class="page-summary">{text}</div>', unsafe_allow_html=True)
+
+
 # ----------------------------------------------------------------------
 # 全局样式
 # ----------------------------------------------------------------------
@@ -957,6 +961,15 @@ def inject_global_style() -> None:
         .friend-row-sub { color: #6b8f7b; font-size: 0.8rem; }
         .chat-target-line { font-weight: 700; color: #0f5132; margin: 2px 0 6px 2px; }
         .voice-hint { color: #6b8f7b; font-size: 0.78rem; }
+        .page-summary {
+            background: rgba(224, 242, 229, 0.6);
+            border: 1px solid rgba(167, 230, 195, 0.5);
+            border-radius: 12px;
+            padding: 10px 16px;
+            margin: 8px 0 16px 0;
+            font-size: 14px;
+            color: #3a5a45;
+        }
 
         /* 创建群聊：淡绿毛玻璃卡片 */
         div[class*="st-key-group-create-card"] {
@@ -3137,7 +3150,7 @@ def render_history_detail() -> None:
 
 def render_history_section() -> None:
     st.markdown("## 历史参赛信息")
-    st.caption(
+    _render_page_summary(
         "可随时查看以前填过的参赛信息、当时的匹配记录，并对新人重新匹配。"
         "“最近新加入”只列出尚未与你组队的新伙伴。"
     )
@@ -3660,7 +3673,9 @@ def render_notifications_block() -> None:
 def render_notices_tab() -> None:
     render_back_to_chat()
     st.markdown("## 邀请通知")
-    st.caption("收到的邀请、我发出的邀请、等待同意 / 已同意 / 已拒绝状态，以及全部提醒与系统通知。")
+    _render_page_summary(
+        "收到的邀请、我发出的邀请、等待同意 / 已同意 / 已拒绝状态，以及全部提醒与系统通知。"
+    )
     invitations = pool.list_invitations_for_user(current_uid)
     pending_recv = [
         inv
@@ -3674,7 +3689,6 @@ def render_notices_tab() -> None:
         and inv.get("status") in ("pending", "rejected", "accepted")
     ]
 
-    st.markdown("### 收到的邀请")
     if not pending_recv:
         st.caption("暂无待处理的邀请。")
     for inv in pending_recv:
@@ -3716,7 +3730,10 @@ def render_notices_tab() -> None:
                 reject_invitation(inv)
                 st.rerun()
 
-    st.markdown("### 我发出的邀请")
+    st.markdown(
+        "<hr style='margin:14px 0 12px 0;border:none;border-top:1px solid rgba(167,230,195,.55)'/>",
+        unsafe_allow_html=True,
+    )
     if not sent_all:
         st.caption("暂无我发出的邀请。")
     status_text_map = {
@@ -3747,6 +3764,47 @@ def render_notices_tab() -> None:
         for inv in pending_recv
     )
     render_notifications_block()
+
+    st.markdown("### 组队提醒")
+    if st.button("立即检查组队提醒", use_container_width=False):
+        st.session_state.last_reminders = pool.generate_team_reminders(24)
+        st.rerun()
+    reminded = st.session_state.get("last_reminders")
+    if reminded is not None:
+        if reminded:
+            st.success(
+                "本次提醒了 %d 条意向：%s"
+                % (
+                    len(reminded),
+                    "、".join(
+                        "%s（%s）" % (x.get("nickname", ""), x.get("competition", ""))
+                        for x in reminded
+                    ),
+                )
+            )
+        else:
+            st.info("本次没有需要提醒的意向（可能都在 24 小时内提醒过）。")
+
+    pending = [
+        intent
+        for intent in pool.list_user_intents(current_uid)
+        if pool.needs_team_response(intent)
+    ]
+    if pending:
+        st.warning("请确认您是否已组队？是否已和对方沟通好？")
+        for intent in pending:
+            iid = intent.get("intent_id")
+            st.markdown(
+                "**%s** —— 请选择：" % _plain_text(intent.get("competition", ""))
+            )
+            c1, c2 = st.columns(2)
+            if c1.button("已组队", key="remind_yes_%s" % iid, use_container_width=True):
+                pool.respond_team_reminder(iid, True)
+                st.rerun()
+            if c2.button("未组队", key="remind_no_%s" % iid, use_container_width=True):
+                pool.respond_team_reminder(iid, False)
+                st.rerun()
+
     store.mark_invitations_seen(
         current_uid, [inv.get("invitation_id") for inv in pending_recv]
     )
@@ -3798,103 +3856,7 @@ def _intent_partner_ids(intent_id: str):
 def render_team_tab() -> None:
     render_back_to_chat()
     st.markdown("## 我的组队")
-    st.caption("我的参赛意向、当前实际组队、组队确认与提醒都在这里。")
-
-    st.markdown("### 我的参赛意向")
-    intents = pool.list_user_intents(current_uid)
-    if not intents:
-        st.caption("还没有参赛意向。")
-    status_map = {
-        "matching": "匹配中",
-        "teamed": "已组队",
-        "expired": "已过期",
-        "removed": "已从参赛池移除",
-        "deleted": "已注销",
-    }
-    rows = []
-    for intent in intents:
-        iid = intent.get("intent_id", "")
-        comp_range = _competition_range_for(intent)
-        period = intent.get("available_period") or {}
-        partners = _intent_partner_ids(iid)
-        try:
-            base = int(intent.get("team_size") or 1)
-        except (TypeError, ValueError):
-            base = 1
-        rows.append(
-            {
-                "比赛": _plain_text(intent.get("competition") or ""),
-                "状态": status_map.get(intent.get("status"), intent.get("status")),
-                "人数区间": "%s-%s" % (comp_range.get("min"), comp_range.get("max")),
-                "当前队伍": base + len(partners),
-                "已邀请待确认": _pending_invite_count(iid),
-                "已组队队友": len(partners),
-                "可组队时间段": _plain_text(period.get("raw") or ""),
-                "截止日期": period.get("end_date") or "未解析",
-            }
-        )
-    if rows:
-        st.dataframe(rows, use_container_width=True, hide_index=True)
-
-    st.markdown("### 组队确认 / 邀请")
-    all_invites = pool.list_invitations_for_user(current_uid)
-    waiting_recv = [
-        inv
-        for inv in all_invites
-        if inv.get("to_user") == current_uid and inv.get("status") == "pending"
-    ]
-    waiting_sent = [
-        inv
-        for inv in all_invites
-        if inv.get("from_user") == current_uid and inv.get("status") == "pending"
-    ]
-    if not waiting_recv and not waiting_sent:
-        st.caption("暂无待确认的邀请。")
-    for inv in waiting_recv:
-        from_user = pool.get_user(inv.get("from_user", "")) or {}
-        st.markdown(
-            "→ **%s** 邀请你组队 · %s"
-            % (
-                _esc(from_user.get("nickname") or "未命名"),
-                _esc(_intent_brief(inv.get("from_intent", ""))),
-            )
-        )
-        c1, c2 = st.columns(2)
-        if c1.button(
-            "同意组队",
-            key="team_accept_%s" % inv.get("invitation_id"),
-            use_container_width=True,
-            type="primary",
-        ):
-            accept_invitation(inv)
-            store.mark_invitations_seen(current_uid, [inv.get("invitation_id")])
-            st.rerun()
-        if c2.button(
-            "拒绝",
-            key="team_reject_%s" % inv.get("invitation_id"),
-            use_container_width=True,
-        ):
-            reject_invitation(inv)
-            store.mark_invitations_seen(current_uid, [inv.get("invitation_id")])
-            st.rerun()
-    for inv in waiting_sent:
-        other = pool.get_user(inv.get("to_user", "")) or {}
-        st.markdown(
-            "→ 等待 **%s** 同意 · %s"
-            % (
-                _esc(other.get("nickname") or "未命名"),
-                _esc(_intent_brief(inv.get("to_intent", ""))),
-            )
-        )
-    had_unseen = any(
-        not store.invitation_seen(current_uid, inv.get("invitation_id", ""))
-        for inv in waiting_recv
-    )
-    store.mark_invitations_seen(
-        current_uid, [inv.get("invitation_id") for inv in waiting_recv]
-    )
-    if had_unseen:
-        st.rerun()
+    _render_page_summary("我的参赛意向、当前实际组队、组队确认与提醒都在这里。")
 
     st.markdown("### 当前实际组队")
     st.caption("包含我自己报名的队伍，也包含别人邀请我加入的其他比赛队伍。")
@@ -3944,42 +3906,6 @@ def render_team_tab() -> None:
                 open_dialog("cancel_team", linked.get("invitation_id"))
             st.caption("取消组队后会回到参赛池继续匹配，原有聊天记录会保留在站内。")
 
-    st.markdown("### 组队提醒")
-    if st.button("立即检查组队提醒", use_container_width=False):
-        st.session_state.last_reminders = pool.generate_team_reminders(24)
-        st.rerun()
-    reminded = st.session_state.get("last_reminders")
-    if reminded is not None:
-        if reminded:
-            st.success(
-                "本次提醒了 %d 条意向：%s"
-                % (
-                    len(reminded),
-                    "、".join(
-                        "%s（%s）" % (x.get("nickname", ""), x.get("competition", ""))
-                        for x in reminded
-                    ),
-                )
-            )
-        else:
-            st.info("本次没有需要提醒的意向（可能都在 24 小时内提醒过）。")
-
-    pending = [i for i in intents if pool.needs_team_response(i)]
-    if pending:
-        st.warning("请确认您是否已组队？是否已和对方沟通好？")
-        for intent in pending:
-            iid = intent.get("intent_id")
-            st.markdown(
-                "**%s** —— 请选择：" % _plain_text(intent.get("competition", ""))
-            )
-            c1, c2 = st.columns(2)
-            if c1.button("已组队", key="remind_yes_%s" % iid, use_container_width=True):
-                pool.respond_team_reminder(iid, True)
-                st.rerun()
-            if c2.button("未组队", key="remind_no_%s" % iid, use_container_width=True):
-                pool.respond_team_reminder(iid, False)
-                st.rerun()
-
     st.markdown("### 过期清理")
     st.caption(
         "超过可组队时间段截止日期且未组队成功的意向，会自动从候选池移除，"
@@ -4028,9 +3954,9 @@ def render_admin_tab() -> None:
     viewer_is_super = _is_super_admin(current_user)
     st.subheader("管理中心")
     if viewer_is_super:
-        st.caption("以好友列表式展示所有注册用户；可查看完整资料、分配/收回管理员、注销普通用户。")
+        _render_page_summary("以好友列表式展示所有注册用户；可查看完整资料、分配/收回管理员、注销普通用户。")
     else:
-        st.caption("以好友列表式展示所有注册用户；你可以查看完整资料、注销普通用户。")
+        _render_page_summary("以好友列表式展示所有注册用户；你可以查看完整资料、注销普通用户。")
 
     st.markdown("### 未收录比赛反馈")
     pending_feedback = store.list_feedback("pending")

@@ -1,5 +1,5 @@
 {
-  "next_seq": 6,
+  "next_seq": 11,
   "users": {
     "U001": {
       "user_id": "U001",
@@ -103,6 +103,107 @@
       "qq": "2356959341",
       "wechat": "325555",
       "email": "2356959341@qq.com"
+    },
+    "U006": {
+      "user_id": "U006",
+      "nickname": "顾南乔",
+      "phone": "15500001001",
+      "contact": "邮箱 顾南乔23@example.com",
+      "contact_type": "邮箱",
+      "school": "长沙理工大学",
+      "major": "数据科学与大数据技术",
+      "free_time": [
+        "周末全天"
+      ],
+      "gender_preference": "男",
+      "interests": [
+        "市场调研",
+        "软件开发"
+      ],
+      "is_teamed": false,
+      "created_at": "2026-11-05 15:19:11",
+      "updated_at": "2026-11-05 15:19:11"
+    },
+    "U007": {
+      "user_id": "U007",
+      "nickname": "唐念",
+      "phone": "15500001002",
+      "contact": "QQ 315953042",
+      "contact_type": "QQ",
+      "school": "中南大学",
+      "major": "汉语言文学",
+      "free_time": [
+        "随时",
+        "周三晚上"
+      ],
+      "gender_preference": "不限",
+      "interests": [
+        "创新创业",
+        "市场调研"
+      ],
+      "is_teamed": false,
+      "created_at": "2026-11-05 15:19:11",
+      "updated_at": "2026-11-05 15:19:11"
+    },
+    "U008": {
+      "user_id": "U008",
+      "nickname": "许星河",
+      "phone": "15500001003",
+      "contact": "微信 许星_22",
+      "contact_type": "微信",
+      "school": "湖南大学",
+      "major": "统计学",
+      "free_time": [
+        "随时"
+      ],
+      "gender_preference": "不限",
+      "interests": [
+        "机器人",
+        "数学建模"
+      ],
+      "is_teamed": false,
+      "created_at": "2026-11-05 15:19:11",
+      "updated_at": "2026-11-05 15:19:11"
+    },
+    "U009": {
+      "user_id": "U009",
+      "nickname": "江屿",
+      "phone": "15500001004",
+      "contact": "邮箱 江屿56@example.com",
+      "contact_type": "邮箱",
+      "school": "中南大学",
+      "major": "汉语言文学",
+      "free_time": [
+        "周末"
+      ],
+      "gender_preference": "女",
+      "interests": [
+        "商业策划",
+        "视觉设计"
+      ],
+      "is_teamed": false,
+      "created_at": "2026-11-05 15:19:11",
+      "updated_at": "2026-11-05 15:19:11"
+    },
+    "U010": {
+      "user_id": "U010",
+      "nickname": "苏晚晴",
+      "phone": "15500001005",
+      "contact": "微信 苏晚_83",
+      "contact_type": "微信",
+      "school": "湖南第一师范学院",
+      "major": "人工智能",
+      "free_time": [
+        "工作日晚间"
+      ],
+      "gender_preference": "男",
+      "interests": [
+        "数据分析",
+        "数学建模"
+      ],
+      "is_teamed": false,
+      "created_at": "2026-11-05 15:19:11",
+      "updated_at": "2026-11-05 15:19:11"
     }
   }
 }
