@@ -181,69 +181,85 @@ def _period_display(period) -> str:
 
 
 def _render_bg_music(height: int = 46, on_light: bool = False) -> None:
-    """背景音乐：先尝试自动播放；被浏览器拦截时，用户第一次交互后自动开始。"""
+    """背景音乐：音频挂在父页面，页面重跑也不会重置；按钮可真正暂停/继续。"""
     uri = _asset_data_uri(os.path.join(BASE_DIR, "assets", "bg_music.mp3"), "audio/mpeg")
     if not uri:
         return
     template = """
     <style>
       html, body { margin: 0; padding: 0; background: transparent; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
-      .wrap { display: flex; align-items: center; gap: 8px; }
+      .wrap { display: flex; align-items: center; gap: 10px; }
       button {
-        border: 1px solid rgba(255,255,255,.7); border-radius: 999px; padding: 6px 13px;
-        background: rgba(255,255,255,.88); color: #0b7a51; font-size: 12px; font-weight: 700; cursor: pointer;
-        box-shadow: 0 4px 12px rgba(6,80,52,.16);
+        border: 1px solid #a7f3d0; border-radius: 999px; padding: 8px 18px;
+        background: rgba(224, 250, 236, 0.95); color: #0b7a51; font-size: 13px; font-weight: 800; cursor: pointer;
+        box-shadow: 0 6px 16px rgba(6,80,52,.16);
       }
-      button:hover { background: #ffffff; }
-      .st { font-size: 11px; color: rgba(255,255,255,.88); }
-      body.on-light .st { color: #5b826d; }
-      body.on-light button { background: #e8fbf1; border-color: #a7f3d0; }
+      button:hover { background: #d8f7e4; }
+      button:active { transform: translateY(1px); }
+      .st { font-size: 11.5px; color: rgba(255,255,255,.9); }
+      body.on-light .st { color: #4f7a64; }
     </style>
-    <audio id="bgm" loop preload="auto" src="__MUSIC__"></audio>
     <div class="wrap"><button id="toggle" type="button">暂停音乐</button><span class="st" id="state"></span></div>
     <script>
     (function () {
       if (__ONLIGHT__) document.body.className = 'on-light';
-      var audio = document.getElementById('bgm');
+      var parentWin = window.parent;
+      var parentDoc = null;
+      try { parentDoc = parentWin.document; } catch (e) {}
+      var storage = null;
+      try { storage = parentWin.localStorage; } catch (e) { try { storage = localStorage; } catch (e2) {} }
+      var audio = null;
+      try {
+        audio = parentWin.__bgmAudio;
+        if (!audio) {
+          audio = parentWin.__bgmAudio = new parentWin.Audio("__MUSIC__");
+          audio.loop = true;
+          audio.preload = 'auto';
+        }
+      } catch (e) {
+        audio = document.createElement('audio');
+        audio.src = '__MUSIC__';
+        audio.loop = true;
+        document.body.appendChild(audio);
+      }
       var btn = document.getElementById('toggle');
       var state = document.getElementById('state');
       var wantPlay = true;
-      try { wantPlay = localStorage.getItem('bgm_on') !== '0'; } catch (e) {}
-      try {
-        var savedTime = parseFloat(localStorage.getItem('bgm_time') || '0');
-        if (savedTime > 0 && isFinite(savedTime)) audio.currentTime = savedTime;
-      } catch (e) {}
-      function paint() { btn.textContent = wantPlay ? '暂停音乐' : '播放音乐'; }
+      try { if (storage) wantPlay = storage.getItem('bgm_on') !== '0'; } catch (e) {}
+      function paint() {
+        btn.textContent = wantPlay ? '暂停音乐' : '播放音乐';
+        state.textContent = wantPlay ? (audio.paused ? '点一下页面即可开始播放' : '背景音乐播放中') : '背景音乐已暂停';
+      }
       function play() {
         if (!wantPlay) return;
-        audio.play().then(function () { state.textContent = '背景音乐播放中'; }).catch(function () {
-          state.textContent = '点一下页面即可开始播放';
-        });
+        var result = audio.play();
+        if (result && result.then) {
+          result.then(paint).catch(function () {
+            state.textContent = '点一下页面即可开始播放';
+          });
+        }
       }
-      function pause() { audio.pause(); }
+      function pause() {
+        audio.pause();
+        paint();
+      }
       function persist() {
-        try {
-          localStorage.setItem('bgm_on', wantPlay ? '1' : '0');
-          localStorage.setItem('bgm_time', String(audio.currentTime || 0));
-        } catch (e) {}
+        try { if (storage) storage.setItem('bgm_on', wantPlay ? '1' : '0'); } catch (e) {}
       }
-      btn.addEventListener('click', function () {
+      btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
         wantPlay = !wantPlay;
         persist();
-        paint();
         if (wantPlay) play(); else pause();
+        paint();
       });
-      var lastSaved = -1;
-      audio.addEventListener('timeupdate', function () {
-        var sec = Math.floor(audio.currentTime || 0);
-        if (sec !== lastSaved) { lastSaved = sec; persist(); }
-      });
+      audio.addEventListener('play', paint);
+      audio.addEventListener('pause', paint);
       var firstInteraction = function () {
         if (wantPlay && audio.paused) play();
       };
-      var parentDoc = null;
-      try { parentDoc = window.parent.document; } catch (e) {}
-      try { if (window.parent && window.parent.__bgmCleanup) window.parent.__bgmCleanup(); } catch (e) {}
+      try { if (parentWin.__bgmCleanup) parentWin.__bgmCleanup(); } catch (e) {}
       function cleanup() {
         try {
           if (parentDoc) {
@@ -257,13 +273,13 @@ def _render_bg_music(height: int = 46, on_light: bool = False) -> None:
       if (parentDoc) {
         parentDoc.addEventListener('pointerdown', firstInteraction, true);
         parentDoc.addEventListener('keydown', firstInteraction, true);
-        try { window.parent.__bgmCleanup = cleanup; } catch (e) {}
+        try { parentWin.__bgmCleanup = cleanup; } catch (e) {}
       }
       document.addEventListener('pointerdown', firstInteraction, true);
       document.addEventListener('keydown', firstInteraction, true);
+      if (wantPlay) { setTimeout(play, 120); } else { audio.pause(); }
       paint();
-      setTimeout(play, 120);
-      setTimeout(function () { if (audio.paused) state.textContent = '点一下页面即可开始播放'; }, 1200);
+      setTimeout(paint, 900);
     })();
     </script>
     """
@@ -275,107 +291,119 @@ def _render_bg_music(height: int = 46, on_light: bool = False) -> None:
     )
 
 
-def _render_voice_input(target_hint: str = "", height: int = 68) -> None:
-    """浏览器语音输入：按住按钮或空格说话，松开结束，识别结果写入当前输入框。"""
+def _render_voice_mic(height: int = 2) -> None:
+    """在聊天输入框最右侧注入小麦克风：长按说话，松开把中文识别结果填入输入框。"""
     template = """
     <style>
-      html, body { margin: 0; padding: 0; background: transparent; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
-      .row { display: flex; align-items: center; gap: 8px; }
-      button {
-        border: 1px solid #a7f3d0; border-radius: 999px; padding: 6px 14px;
-        background: #eafaf1; color: #0b7a51; font-size: 12.5px; font-weight: 700; cursor: pointer;
-      }
-      button:hover { background: #d8f7e4; }
-      button.rec { background: #34c759; color: #fff; border-color: #2ebd85; }
-      .st { font-size: 11.5px; color: #6b8f7b; }
+      html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
     </style>
-    <div class="row"><button id="vb" type="button">语音输入</button><span class="st" id="vs">按住按钮或空格说话，松开结束</span></div>
     <script>
     (function () {
-      var btn = document.getElementById('vb');
-      var status = document.getElementById('vs');
       var parentWin = null, parentDoc = null;
       try { parentWin = window.parent; parentDoc = window.parent.document; } catch (e) {}
+      var scope = parentDoc || document;
       var SR = null;
-      try { SR = (parentWin && (parentWin.SpeechRecognition || parentWin.webkitSpeechRecognition)) || window.SpeechRecognition || window.webkitSpeechRecognition; } catch (e) {}
-      if (!SR) {
-        status.textContent = '当前浏览器不支持语音识别，请使用 Chrome / Edge';
-        btn.disabled = true;
-        return;
-      }
-      var rec = null, listening = false, finalText = '', lastEditable = null;
+      try {
+        SR = (parentWin && (parentWin.SpeechRecognition || parentWin.webkitSpeechRecognition))
+             || window.SpeechRecognition || window.webkitSpeechRecognition;
+      } catch (e) {}
+      if (!SR) return;
+
+      var mic = null, rec = null, listening = false, finalText = '', interimText = '', target = null;
+      var spaceTimer = null, spaceRecording = false;
+
       function isEditable(el) {
         return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
       }
-      function remember(e) { if (isEditable(e.target)) lastEditable = e.target; }
-      function findTarget() {
-        var scope = parentDoc || document;
-        if (lastEditable && scope.contains(lastEditable)) return lastEditable;
-        var byAria = scope.querySelector('input[aria-label="输入你的参赛需求"]');
-        if (byAria) return byAria;
-        var inputs = Array.prototype.slice.call(scope.querySelectorAll('input[type="text"], textarea, input:not([type])'));
-        for (var i = 0; i < inputs.length; i++) {
-          if (!inputs[i].disabled && inputs[i].offsetParent !== null) return inputs[i];
+      function findChatInput() {
+        var containers = scope.querySelectorAll('[class*="st-key-chat-input"]');
+        for (var i = 0; i < containers.length; i++) {
+          if (containers[i].offsetParent === null) continue;
+          var input = containers[i].querySelector('input[type="text"], input:not([type]), textarea');
+          if (input && !input.disabled && input.offsetParent !== null) return input;
+        }
+        var inputs = scope.querySelectorAll('input[type="text"], textarea');
+        for (var j = 0; j < inputs.length; j++) {
+          var aria = inputs[j].getAttribute('aria-label') || '';
+          if (aria === '输入你的参赛需求' || aria === '群消息' || aria.indexOf('发给 ') === 0) {
+            if (!inputs[j].disabled && inputs[j].offsetParent !== null) return inputs[j];
+          }
         }
         return null;
       }
-      function fill(text) {
-        var el = findTarget();
-        if (!el) { status.textContent = '请先点击要填写的输入框'; return; }
+      function fill(el, text) {
+        if (!el) return;
         var proto = el.tagName === 'TEXTAREA'
-          ? (parentWin ? parentWin.HTMLTextAreaElement.prototype : window.HTMLTextAreaElement.prototype)
-          : (parentWin ? parentWin.HTMLInputElement.prototype : window.HTMLInputElement.prototype);
+          ? (parentWin ? parentWin.HTMLTextAreaElement.prototype : HTMLTextAreaElement.prototype)
+          : (parentWin ? parentWin.HTMLInputElement.prototype : HTMLInputElement.prototype);
         var desc = Object.getOwnPropertyDescriptor(proto, 'value');
-        if (desc && desc.set) desc.set.call(el, (el.value ? el.value + ' ' : '') + text);
-        else el.value = (el.value ? el.value + ' ' : '') + text;
+        var base = el.value || '';
+        if (!base.trim()) base = '';
+        var value = base ? base + ' ' + text : text;
+        if (desc && desc.set) desc.set.call(el, value);
+        else el.value = value;
         var EventCtor = (parentWin && parentWin.Event) ? parentWin.Event : Event;
         el.dispatchEvent(new EventCtor('input', { bubbles: true }));
         el.dispatchEvent(new EventCtor('change', { bubbles: true }));
         try { el.focus(); } catch (e) {}
-        status.textContent = '已填入：' + text;
       }
-      function paint(on) { btn.textContent = on ? '正在听，松开结束' : '语音输入'; btn.className = on ? 'rec' : ''; }
+      function paint(on) {
+        if (!mic) return;
+        mic.textContent = on ? '●' : '🎤';
+        mic.style.background = on ? '#34c759' : 'rgba(240,253,244,.88)';
+        mic.style.color = on ? '#ffffff' : '#059669';
+        mic.style.borderColor = on ? '#2ebd85' : '#a7f3d0';
+        mic.style.boxShadow = on
+          ? '0 0 0 3px rgba(52,199,89,.20), 0 2px 7px rgba(6,80,52,.18)'
+          : '0 2px 6px rgba(6,80,52,.12)';
+        mic.title = on ? '正在听，松开结束' : '按住说话，松开转文字';
+      }
+      function flush() {
+        var text = (finalText + interimText).trim();
+        finalText = '';
+        interimText = '';
+        if (!text) return;
+        var el = target && target.offsetParent !== null ? target : findChatInput();
+        if (el) fill(el, text);
+      }
       function start() {
         if (listening) return;
+        target = findChatInput();
+        if (!target) return;
         finalText = '';
+        interimText = '';
         listening = true;
         paint(true);
-        status.textContent = '正在听……请说话';
         try {
           rec = new SR();
           rec.lang = 'zh-CN';
           rec.continuous = true;
           rec.interimResults = true;
           rec.onresult = function (event) {
-            var interim = '';
+            interimText = '';
             for (var i = event.resultIndex; i < event.results.length; i++) {
               var res = event.results[i];
               if (res.isFinal) finalText += res[0].transcript;
-              else interim += res[0].transcript;
+              else interimText += res[0].transcript;
             }
-            status.textContent = '正在听：' + (finalText + interim || '……');
           };
           rec.onerror = function (event) {
             if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-              status.textContent = '请允许浏览器使用麦克风后再试';
-              listening = false; paint(false);
-            } else if (event.error === 'no-speech') {
-              status.textContent = '没有听到声音，请再试一次';
+              listening = false;
+              paint(false);
             }
           };
           rec.onend = function () {
             if (listening) {
               try { rec.start(); } catch (e) {}
-            } else if (finalText.trim()) {
-              var text = finalText.trim();
-              finalText = '';
-              fill(text);
+            } else {
+              flush();
             }
           };
           rec.start();
         } catch (e) {
-          listening = false; paint(false);
-          status.textContent = '无法启动语音识别，请检查麦克风权限';
+          listening = false;
+          paint(false);
         }
       }
       function stop() {
@@ -383,55 +411,101 @@ def _render_voice_input(target_hint: str = "", height: int = 68) -> None:
         listening = false;
         paint(false);
         try { if (rec) rec.stop(); } catch (e) {}
-        if (finalText.trim()) {
-          var text = finalText.trim();
-          finalText = '';
-          fill(text);
-        }
+        flush();
       }
-      btn.addEventListener('pointerdown', function (e) { e.preventDefault(); start(); });
-      btn.addEventListener('pointerup', function (e) { e.preventDefault(); stop(); });
-      btn.addEventListener('pointerleave', function () { if (listening) stop(); });
+      function ensureMic() {
+        var input = findChatInput();
+        if (!input) return false;
+        var wrapper = input.closest ? input.closest('div[data-baseweb="input"]') : null;
+        if (!wrapper) wrapper = input.parentElement;
+        if (!wrapper) return false;
+        if (mic && mic.parentNode) mic.parentNode.removeChild(mic);
+        mic = parentDoc.createElement('button');
+        mic.type = 'button';
+        mic.setAttribute('aria-label', '语音输入');
+        mic.title = '按住说话，松开转文字';
+        mic.textContent = '🎤';
+        mic.style.cssText = 'position:absolute;right:6px;top:50%;transform:translateY(-50%);' +
+          'width:28px;height:28px;padding:0;border:1px solid #a7f3d0;border-radius:50%;' +
+          'background:rgba(240,253,244,.88);color:#059669;font-size:14px;line-height:1;' +
+          'display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:10;' +
+          'box-shadow:0 2px 6px rgba(6,80,52,.12);';
+        wrapper.style.position = 'relative';
+        input.style.paddingRight = '40px';
+        wrapper.appendChild(mic);
+        mic.addEventListener('pointerdown', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          start();
+        });
+        mic.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+        });
+        if (parentWin) parentWin.__voiceMicBtn = mic;
+        return true;
+      }
+      var pointerUp = function () { if (listening) stop(); };
       var spaceDown = function (e) {
-        if (e.code !== 'Space' || isEditable(e.target)) return;
-        e.preventDefault();
-        start();
+        if (e.code !== 'Space') return;
+        if (e.target && (e.target.tagName === 'BUTTON' || e.target.tagName === 'A' || e.target.tagName === 'SELECT')) return;
+        if (isEditable(e.target) && String(e.target.value || '').trim()) return;
+        if (spaceTimer) return;
+        spaceTimer = setTimeout(function () {
+          spaceTimer = null;
+          spaceRecording = true;
+          start();
+        }, 260);
       };
       var spaceUp = function (e) {
         if (e.code !== 'Space') return;
-        e.preventDefault();
-        stop();
+        if (spaceTimer) { clearTimeout(spaceTimer); spaceTimer = null; }
+        if (spaceRecording) {
+          e.preventDefault();
+          spaceRecording = false;
+          stop();
+        }
       };
-      var focusIn = remember;
       try { if (parentWin && parentWin.__voiceCleanup) parentWin.__voiceCleanup(); } catch (e) {}
       function cleanup() {
+        if (spaceTimer) { clearTimeout(spaceTimer); spaceTimer = null; }
+        if (listening) { listening = false; try { if (rec) rec.abort(); } catch (e) {} }
+        try { if (mic && mic.parentNode) mic.parentNode.removeChild(mic); } catch (e) {}
+        try { if (target) target.style.paddingRight = ''; } catch (e) {}
         try {
           if (parentDoc) {
+            parentDoc.removeEventListener('pointerup', pointerUp, true);
             parentDoc.removeEventListener('keydown', spaceDown, true);
             parentDoc.removeEventListener('keyup', spaceUp, true);
-            parentDoc.removeEventListener('focusin', focusIn, true);
           }
         } catch (e) {}
+        document.removeEventListener('pointerup', pointerUp, true);
         document.removeEventListener('keydown', spaceDown, true);
         document.removeEventListener('keyup', spaceUp, true);
-        document.removeEventListener('focusin', focusIn, true);
+        if (parentWin) {
+          parentWin.__voiceMicBtn = null;
+          parentWin.__voiceCleanup = null;
+        }
       }
       if (parentDoc) {
+        parentDoc.addEventListener('pointerup', pointerUp, true);
         parentDoc.addEventListener('keydown', spaceDown, true);
         parentDoc.addEventListener('keyup', spaceUp, true);
-        parentDoc.addEventListener('focusin', focusIn, true);
-        try { window.parent.__voiceCleanup = cleanup; } catch (e) {}
+        try { parentWin.__voiceCleanup = cleanup; } catch (e) {}
       }
+      document.addEventListener('pointerup', pointerUp, true);
       document.addEventListener('keydown', spaceDown, true);
       document.addEventListener('keyup', spaceUp, true);
-      document.addEventListener('focusin', focusIn, true);
-      if ('__HINT__') { status.textContent = '__HINT__'; }
+      var tries = 0;
+      function attach() {
+        tries += 1;
+        if (!ensureMic() && tries < 20) setTimeout(attach, 250);
+      }
+      attach();
     })();
     </script>
     """
-    components.html(
-        template.replace("__HINT__", str(target_hint or "")), height=height
-    )
+    components.html(template, height=height)
 
 
 # ----------------------------------------------------------------------
@@ -813,12 +887,12 @@ def inject_global_style() -> None:
             transform: translateY(-1px);
         }
         div[class*="st-key-navbtn_"][class*="active"] button {
-            background: linear-gradient(145deg, rgba(46,189,133,.92) 0%, rgba(53,202,139,.76) 46%, rgba(35,165,113,.86) 100%) !important;
-            color: #ffffff !important;
-            border: 1px solid rgba(46, 189, 133, 0.9) !important;
+            background: linear-gradient(145deg, rgba(236,253,245,.95) 0%, rgba(187,247,208,.82) 48%, rgba(167,243,208,.9) 100%) !important;
+            color: #15803d !important;
+            border: 1px solid rgba(134, 239, 172, 0.9) !important;
             backdrop-filter: blur(16px) saturate(150%);
-            box-shadow: inset 0 2px 0 rgba(255,255,255,.55), inset 0 -8px 18px rgba(255,255,255,.16),
-                        0 12px 26px rgba(5, 78, 51, 0.18);
+            box-shadow: inset 0 2px 0 rgba(255,255,255,.92), inset 0 -8px 18px rgba(255,255,255,.38),
+                        0 12px 26px rgba(5, 78, 51, 0.12);
             transform: translateY(-1px);
             position: relative;
             overflow: hidden;
@@ -831,7 +905,7 @@ def inject_global_style() -> None:
             top: 2px;
             height: 42%;
             border-radius: 14px;
-            background: linear-gradient(180deg, rgba(255,255,255,.75) 0%, rgba(255,255,255,0) 100%);
+            background: linear-gradient(180deg, rgba(255,255,255,.85) 0%, rgba(255,255,255,0) 100%);
             pointer-events: none;
         }
 
@@ -883,6 +957,37 @@ def inject_global_style() -> None:
         .friend-row-sub { color: #6b8f7b; font-size: 0.8rem; }
         .chat-target-line { font-weight: 700; color: #0f5132; margin: 2px 0 6px 2px; }
         .voice-hint { color: #6b8f7b; font-size: 0.78rem; }
+
+        /* 创建群聊：淡绿毛玻璃卡片 */
+        div[class*="st-key-group-create-card"] {
+            background: rgba(220, 250, 236, 0.60) !important;
+            backdrop-filter: blur(16px) saturate(140%);
+            border: 1px solid rgba(167, 243, 208, 0.78) !important;
+            border-radius: 20px !important;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.68),
+                        0 12px 30px rgba(6, 80, 52, 0.08) !important;
+        }
+        div[class*="st-key-group-create-card"] div[data-testid="stForm"] {
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+        }
+        div[class*="st-key-group-create-card"] .stTextInput div[data-baseweb="input"] {
+            background: rgba(255,255,255,0.38) !important;
+            border: 1px solid #a7f3d0 !important;
+            border-radius: 12px !important;
+        }
+        div[class*="st-key-group-create-card"] .stTextInput div[data-baseweb="base-input"],
+        div[class*="st-key-group-create-card"] .stTextInput input {
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+        }
+        div[class*="st-key-group-create-card"] div[data-baseweb="select"] > div {
+            background: rgba(255,255,255,0.38) !important;
+            border-color: #a7f3d0 !important;
+            border-radius: 10px !important;
+        }
         </style>
         """.replace(
             "__BG_IMAGE__",
@@ -1115,12 +1220,41 @@ def inject_login_style() -> None:
             text-shadow: 0 2px 14px rgba(6, 78, 59, 0.55);
         }
         div[class*="st-key-login-card"] {
-            background: rgba(255, 255, 255, 0.62);
-            backdrop-filter: blur(18px);
-            border: 1px solid rgba(255, 255, 255, 0.7);
+            background: linear-gradient(155deg, rgba(236,253,245,0.72) 0%, rgba(209,250,229,0.52) 100%);
+            backdrop-filter: blur(22px) saturate(140%);
+            border: 1px solid rgba(255, 255, 255, 0.78);
             border-radius: 26px;
-            padding: 24px 28px 16px 28px;
-            box-shadow: 0 22px 60px rgba(6, 78, 59, 0.22);
+            padding: 26px 28px 18px 28px;
+            box-shadow:
+                inset 0 2px 2px rgba(255,255,255,.85),
+                inset 0 -14px 28px rgba(52,211,153,.16),
+                inset 0 0 0 1px rgba(167,243,208,.35),
+                0 20px 46px rgba(6,78,59,.16);
+            position: relative;
+            overflow: hidden;
+        }
+        div[class*="st-key-login-card"]::before {
+            content: "";
+            position: absolute;
+            left: 5%;
+            right: 5%;
+            top: -22%;
+            height: 68%;
+            border-radius: 50%;
+            background: radial-gradient(ellipse at 50% 0%, rgba(255,255,255,.75) 0%, rgba(255,255,255,.18) 45%, rgba(255,255,255,0) 75%);
+            filter: blur(2px);
+            pointer-events: none;
+        }
+        div[class*="st-key-login-card"]::after {
+            content: "";
+            position: absolute;
+            left: 9%;
+            right: 9%;
+            bottom: -20%;
+            height: 46%;
+            border-radius: 50%;
+            background: radial-gradient(ellipse at 50% 100%, rgba(110,231,183,.26) 0%, rgba(110,231,183,0) 70%);
+            pointer-events: none;
         }
         div[class*="st-key-login-card"] h4 {
             color: #065f46;
@@ -1138,8 +1272,56 @@ def inject_login_style() -> None:
             font-weight: 700;
             min-height: 2.8rem;
         }
-        div[class*="st-key-login-card"] input {
-            background: rgba(255,255,255,0.9) !important;
+        div[class*="st-key-login-card"] div[data-testid="stForm"] {
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+            backdrop-filter: none !important;
+            padding: 2px 0 0 0 !important;
+        }
+        div[class*="st-key-login-card"] .stTextInput div[data-baseweb="input"] {
+            background: rgba(255,255,255,0.30) !important;
+            border: 1px solid #a7f3d0 !important;
+            border-radius: 12px !important;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.55) !important;
+        }
+        div[class*="st-key-login-card"] .stTextInput div[data-baseweb="base-input"] {
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+        }
+        div[class*="st-key-login-card"] .stTextInput div[data-baseweb="input"]:focus-within {
+            border-color: #34d399 !important;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.5),
+                        0 0 0 2px rgba(52, 211, 153, 0.18) !important;
+        }
+        div[class*="st-key-login-card"] .stTextInput input {
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+            color: #14532d !important;
+        }
+        div[class*="st-key-login-card"] .stTextInput input::placeholder {
+            color: rgba(20, 83, 45, 0.48) !important;
+        }
+        div[class*="st-key-login-card"] [data-testid="stFileUploaderDropzone"] {
+            background: rgba(255,255,255,0.28) !important;
+            border: 1px dashed rgba(52, 211, 153, 0.65) !important;
+            border-radius: 14px !important;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.45) !important;
+        }
+        div[class*="st-key-login-card"] [data-testid="stFileUploaderDropzone"] * {
+            color: #14532d !important;
+        }
+        div[class*="st-key-login-card"] [data-testid="stFileUploaderDropzone"] button {
+            background: rgba(255,255,255,0.42) !important;
+            border: 1px solid #a7f3d0 !important;
+            border-radius: 10px !important;
+            color: #15803d !important;
+            box-shadow: none !important;
+        }
+        div[class*="st-key-login-card"] [data-testid="stFileUploaderFile"] {
+            background: transparent !important;
         }
         .login-music {
             margin-top: 6px;
@@ -1336,6 +1518,7 @@ if (
 
 
 inject_global_style()
+_render_bg_music(on_light=True)
 
 
 # ----------------------------------------------------------------------
@@ -1745,6 +1928,8 @@ def delete_user_record(target_uid: str) -> None:
     user = pool.get_user(target_uid) or {}
     if not user:
         return
+    if _is_super_admin(user) or _is_admin(target_uid):
+        return
     pool.users.pop(target_uid, None)
     pool._save_users()
     for intent in pool.intents.values():
@@ -1764,6 +1949,9 @@ def delete_user_record(target_uid: str) -> None:
 @st.dialog("注销用户")
 def delete_user_dialog(target_uid: str) -> None:
     user = pool.get_user(target_uid) or {}
+    if _is_super_admin(user) or _is_admin(target_uid):
+        st.error("管理员身份的用户不能被注销。")
+        return
     st.markdown(
         "确定要注销用户 **%s**（%s）并删除其资料吗？"
         % (_esc(user.get("nickname") or "未命名"), _esc(user.get("phone") or "无手机号"))
@@ -2064,18 +2252,22 @@ def render_sidebar() -> str:
         if st.button("退出登录", use_container_width=True, key="logout_btn"):
             logout()
 
-        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-        _render_bg_music()
-
     return st.session_state.get("page", "chat")
+
+
+def _go_back_to_chat() -> None:
+    st.session_state.page = "chat"
 
 
 def render_back_to_chat() -> None:
     if st.session_state.get("page", "chat") == "chat":
         return
-    if st.button("← 回到智能体对话", key="back_to_chat", use_container_width=False):
-        st.session_state.page = "chat"
-        st.rerun()
+    st.button(
+        "← 回到智能体对话",
+        key="back_to_chat",
+        use_container_width=False,
+        on_click=_go_back_to_chat,
+    )
 
 
 # ----------------------------------------------------------------------
@@ -2252,8 +2444,8 @@ def handle_user_text(text: str) -> None:
         )
         if not reply:
             reply = (
-                "我在。你可以随便和我聊，也可以直接告诉我你想参加的比赛名称，"
-                "我来帮你找志同道合的队友。"
+                "我在听～你刚刚说「%s」。想继续聊这个话题，还是想让我帮你推荐比赛、找队友？"
+                % text[:40]
             )
         append_chat("assistant", reply)
         if previous_stage == "matched":
@@ -2389,7 +2581,6 @@ def render_intent_form() -> None:
     st.subheader("填写组队需求")
     st.caption("带「必填」的项目需要填写；带「（选填）」的项目不填可直接跳过。")
     st.caption("表单初始为空，不会自动带出任何已有资料。")
-    _render_voice_input("先点一下要填写的输入框，再按住空格或语音按钮说话")
 
     with st.form("intent_form_%d" % int(st.session_state.get("form_version", 0))):
         st.markdown("##### 必填项")
@@ -2426,10 +2617,24 @@ def render_intent_form() -> None:
             )
         with c2:
             school = st.text_input("学校（必填）", placeholder="例如：湖南第一师范学院")
-        period_input = st.text_input(
-            "可组队时间段（必填）",
-            placeholder="例如：这个学期 / 2026-10 到 2027-01",
-        )
+        st.markdown("**可组队时间段（必填）**")
+        pc1, pc2 = st.columns(2)
+        with pc1:
+            period_start = st.date_input(
+                "开始日期",
+                value=date.today(),
+            )
+        with pc2:
+            period_end = st.date_input(
+                "结束日期",
+                value=llm_api.default_period_end(),
+            )
+        period_input = ""
+        if period_start and period_end:
+            period_input = "%s 到 %s" % (
+                period_start.strftime("%Y-%m-%d"),
+                period_end.strftime("%Y-%m-%d"),
+            )
 
         st.markdown("##### 选填项（不填可直接跳过）")
         free_time = st.text_input(
@@ -2480,6 +2685,9 @@ def render_intent_form() -> None:
         missing.append("可组队时间段")
     if missing:
         st.error("请填写以下必填项：%s。" % "、".join(missing))
+        return
+    if period_start and period_end and period_start > period_end:
+        st.error("结束日期不能早于开始日期，请重新选择。")
         return
 
     period_value = llm_api.parse_period_text(str(period_input).strip())
@@ -3028,16 +3236,17 @@ def render_chat_tab() -> None:
                     st.session_state.last_error = "处理失败：%s" % exc
                 st.rerun()
 
-        _render_voice_input("先点一下输入框，再按住空格或语音按钮说话")
-        with st.form("chat_form", clear_on_submit=True):
-            cols = st.columns([5, 1])
-            prompt = cols[0].text_input(
-                "输入你的参赛需求",
-                key="chat_prompt_input",
-                label_visibility="collapsed",
-                placeholder="随便聊聊，或说：我想参加大创赛",
-            )
-            submitted = cols[1].form_submit_button("发送", use_container_width=True)
+        with st.container(key="chat-input-main"):
+            with st.form("chat_form", clear_on_submit=True):
+                cols = st.columns([5, 1])
+                prompt = cols[0].text_input(
+                    "输入你的参赛需求",
+                    key="chat_prompt_input",
+                    label_visibility="collapsed",
+                    placeholder="随便聊聊，或说：我想参加大创赛",
+                )
+                submitted = cols[1].form_submit_button("发送", use_container_width=True)
+        _render_voice_mic()
 
         if submitted and str(prompt or "").strip():
             try:
@@ -3172,7 +3381,6 @@ def render_friend_chat(friend_id: str) -> None:
         ),
         unsafe_allow_html=True,
     )
-    _render_voice_input("先点一下聊天输入框，再按住空格或语音按钮说话")
     with st.container(key="chat-input-%s" % friend_id):
         with st.form(key="msg_form_%s" % friend_id):
             content = st.text_input(
@@ -3190,6 +3398,7 @@ def render_friend_chat(friend_id: str) -> None:
                     st.rerun()
                 except Exception as exc:
                     st.error(str(exc))
+    _render_voice_mic()
 
 
 def render_friends_tab() -> None:
@@ -3260,7 +3469,7 @@ def render_groups_tab() -> None:
     friend_ids = _friend_ids(current_uid)
     friend_ids.sort(key=lambda uid: _user_name(uid))
     if st.session_state.get("show_group_create"):
-        with st.container(border=True):
+        with st.container(border=True, key="group-create-card"):
             st.markdown("**创建群聊**")
             with st.form("group_create_form"):
                 gname = st.text_input("群聊名称", placeholder="例如：大创赛冲奖小队")
@@ -3360,7 +3569,6 @@ def render_groups_tab() -> None:
             % _esc(group.get("name") or "群聊"),
             unsafe_allow_html=True,
         )
-        _render_voice_input("先点一下群聊输入框，再按住空格或语音按钮说话")
         with st.container(key="chat-input-group"):
             with st.form(key="group_msg_form_%s" % chosen_group):
                 gcontent = st.text_input(
@@ -3375,6 +3583,7 @@ def render_groups_tab() -> None:
                         st.rerun()
                     except Exception as exc:
                         st.error(str(exc))
+        _render_voice_mic()
 
 
 def render_notifications_block() -> None:
@@ -3395,6 +3604,13 @@ def render_notifications_block() -> None:
                     use_container_width=True,
                     type="primary",
                 ):
+                    inviter_uid = store.get_admin_inviter(current_uid)
+                    inviter_user = pool.get_user(inviter_uid) or {}
+                    if not _is_super_admin(inviter_user):
+                        store.reject_admin_invite(current_uid)
+                        store.mark_notification_read(note.get("notification_id"), current_uid)
+                        _set_flash("该管理员邀请已失效：只有超级管理员可以分配管理员。")
+                        st.rerun()
                     inviter = store.accept_admin_invite(current_uid)
                     store.mark_notification_read(note.get("notification_id"), current_uid)
                     if inviter:
@@ -3809,8 +4025,12 @@ def render_admin_tab() -> None:
         st.error("只有管理员可以进入管理中心。")
         return
 
+    viewer_is_super = _is_super_admin(current_user)
     st.subheader("管理中心")
-    st.caption("以好友列表式展示所有注册用户；可查看完整资料、邀请成为管理员、注销用户。")
+    if viewer_is_super:
+        st.caption("以好友列表式展示所有注册用户；可查看完整资料、分配/收回管理员、注销普通用户。")
+    else:
+        st.caption("以好友列表式展示所有注册用户；你可以查看完整资料、注销普通用户。")
 
     st.markdown("### 未收录比赛反馈")
     pending_feedback = store.list_feedback("pending")
@@ -3900,7 +4120,20 @@ def render_admin_tab() -> None:
                     profile_dialog(uid, (intent or {}).get("intent_id", ""))
             with row[4]:
                 if store.is_admin(uid):
-                    st.caption("已是管理员")
+                    if viewer_is_super and not _is_super_admin(user) and uid != current_uid:
+                        if st.button("收回管理员", key="admin_revoke_%s" % uid, use_container_width=True):
+                            store.remove_admin(uid)
+                            store.notify(
+                                uid,
+                                "你的管理员身份已被超级管理员收回。",
+                                "admin_removed",
+                            )
+                            _set_flash("已收回该用户的管理员身份。")
+                            st.rerun()
+                    else:
+                        st.caption("已是管理员")
+                elif not viewer_is_super:
+                    st.caption("仅超级管理员可分配")
                 elif store.get_admin_inviter(uid):
                     st.caption("已发出邀请")
                 elif st.button("设为管理员", key="admin_set_%s" % uid, use_container_width=True):
@@ -3914,7 +4147,7 @@ def render_admin_tab() -> None:
                     _set_flash("已向该用户发出管理员邀请。")
                     st.rerun()
             with row[5]:
-                if _is_super_admin(user) or uid == current_uid:
+                if _is_super_admin(user) or _is_admin(uid) or uid == current_uid:
                     st.caption("不可注销")
                 elif st.button("注销", key="admin_delete_%s" % uid, use_container_width=True):
                     open_dialog("delete_user", uid)
