@@ -3433,7 +3433,7 @@ def render_candidate(item: dict, host_intent_id: str, group: str) -> None:
                     )
                 st.table(rows)
                 st.caption(
-                    "匹配分 = Σ(维度得分 × 权重) / Σ(实际计入权重) × 100；"
+                    "匹配分 = 15（保底）+ 85 × Σ(维度得分 × 权重) / Σ(实际计入权重)；"
                     "未填的可选维度不计入。"
                 )
 
@@ -3481,7 +3481,7 @@ def render_match_results() -> None:
 
     st.caption(
         "候选池检查 %s 条意向；倒排索引技能命中 %s 条；"
-        "推荐列表 = 匹配分 > 0，备选列表 = 满足硬约束但匹配分 = 0。"
+        "通过硬约束的候选人保底 15 分，其余按软约束权重计算。"
         % (result.get("candidates_checked", 0), result.get("index_hits", 0))
     )
 
@@ -3763,6 +3763,29 @@ def render_history_section() -> None:
                     % unseen,
                     unsafe_allow_html=True,
                 )
+            with st.expander("查看完整资料"):
+                detail_rows = [
+                    ("昵称", _plain_text(current_user.get("nickname")) or "未填写"),
+                    ("手机号", _plain_text(current_user.get("phone")) or "未填写"),
+                    ("QQ", _plain_text(current_user.get("qq")) or "未填写"),
+                    ("微信", _plain_text(current_user.get("wechat")) or "未填写"),
+                    ("邮箱", _plain_text(current_user.get("email")) or "未填写"),
+                    ("联系方式", _plain_text(_user_contact(current_user)) or "未填写"),
+                    ("学校", _plain_text(current_user.get("school")) or "未填写"),
+                    ("专业", _plain_text(current_user.get("major")) or "未填写"),
+                    ("比赛名称", _competition_display(intent.get("competition")) or "未填写"),
+                    ("掌握技术", _display_value("skills", intent.get("skills"))),
+                    ("希望队友擅长", _display_value("wanted_skills", intent.get("wanted_skills"))),
+                    ("已有几人", _display_value("team_size", base_size)),
+                    ("可组队时间段", _display_value("available_period", intent.get("available_period"))),
+                    ("空闲时间", _display_value("free_time", current_user.get("free_time"))),
+                    ("性别偏好", _plain_text(current_user.get("gender_preference")) or "未填写"),
+                    ("兴趣方向", _display_value("interests", current_user.get("interests"))),
+                    ("希望担任角色", _plain_text(intent.get("preferred_role")) or "未填写"),
+                    ("是否已有项目创意", _display_value("has_idea", intent.get("has_idea"))),
+                    ("是否愿意线下见面", _display_value("willing_offline", intent.get("willing_offline"))),
+                ]
+                st.markdown(_html_table(detail_rows), unsafe_allow_html=True)
         with c2:
             if st.button("查看匹配记录", key="hist_view_%s" % iid, use_container_width=True):
                 st.session_state.history_view_intent = iid

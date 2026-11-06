@@ -56,17 +56,19 @@ OPTIONAL_FIELDS: List[Tuple[str, str]] = [
     ("willing_offline", "是否愿意线下见面"),
 ]
 
-# 软约束权重（总和 1.0）
+# 软约束权重（总和 0.85）+ 保底 15 分
 WEIGHTS: Dict[str, float] = {
-    "技能匹配": 0.45,
-    "学校/地域": 0.10,
-    "空闲时间": 0.05,
-    "兴趣方向": 0.05,
-    "性别偏好": 0.03,
-    "希望担任角色": 0.02,
-    "是否已有创意": 0.02,
-    "是否愿意线下见面": 0.02,
+    "技能匹配": 0.25,
+    "学校/地域": 0.20,
+    "空闲时间": 0.10,
+    "兴趣方向": 0.10,
+    "性别偏好": 0.05,
+    "希望担任角色": 0.05,
+    "是否已有创意": 0.05,
+    "是否愿意线下见面": 0.05,
 }
+
+BASE_SCORE = 15.0
 
 DEFAULT_TABLE: Dict[str, Any] = {
     "competitions": {},
@@ -583,8 +585,8 @@ def score_pair(
     cand_user: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
-    计算两个“意向”的匹配分（0-100）。
-    返回 {"score": float, "breakdown": {...}}。
+    计算两个“意向”的匹配分（15-100）。
+    硬约束通过后保底 15 分；其余 85 分按软约束权重计算。
     未填的可选维度为 None，不计入分母。
     """
     skill = jaccard(
@@ -632,11 +634,16 @@ def score_pair(
         }
 
     if applied_weight <= 0:
-        score = 0.0
+        ratio = 0.0
     else:
-        score = weighted_sum / applied_weight * 100.0
-    return {"score": round(score, 1), "breakdown": breakdown,
-            "applied_weight": round(applied_weight, 4)}
+        ratio = weighted_sum / applied_weight
+    score = BASE_SCORE + ratio * (100.0 - BASE_SCORE)
+    return {
+        "score": round(score, 1),
+        "breakdown": breakdown,
+        "applied_weight": round(applied_weight, 4),
+        "base_score": BASE_SCORE,
+    }
 
 
 # ----------------------------------------------------------------------
