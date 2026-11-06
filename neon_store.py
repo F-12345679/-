@@ -141,7 +141,7 @@ def load_json_checked(key: str, default):
             _log_users(cached[1], "缓存命中")
         return True, copy.deepcopy(cached[1])
     last_error = None
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             _ensure_table()
             with _get_conn() as conn:
@@ -168,7 +168,8 @@ def load_json_checked(key: str, default):
         except Exception as exc:
             last_error = exc
             _reset_conn()
-            if attempt == 0:
+            if attempt < 2:
+                time.sleep(0.35 * (attempt + 1))
                 continue
     if cached is not None:
         print(
@@ -211,6 +212,8 @@ def save_json(key: str, data) -> bool:
                 "[neon_store] 写入失败 %s（第 %d 次）: %s" % (key, attempt + 1, exc),
                 file=sys.stderr,
             )
+            if attempt < 2:
+                time.sleep(0.35 * (attempt + 1))
     return False
 
 

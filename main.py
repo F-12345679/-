@@ -26,6 +26,7 @@ import streamlit.components.v1 as components
 
 import llm_api
 import matcher
+import neon_store
 from data_pool import DataPool, dedupe_list, pair_key
 from social_store import (
     DEFAULT_AVATAR,
@@ -1803,6 +1804,12 @@ if (
     st.session_state.is_admin = _is_admin(current_uid)
     st.session_state.admin_flag_user = current_uid
 current_is_admin = bool(st.session_state.get("is_admin"))
+if not current_is_admin and (
+    _is_super_admin(current_user) or _is_admin(current_uid)
+):
+    st.session_state.is_admin = True
+    st.session_state.admin_flag_user = current_uid
+    current_is_admin = True
 render_admin_invite_banner()
 
 
@@ -2080,6 +2087,8 @@ def render_flash_and_dialogs() -> None:
         feedback_dialog()
     elif kind == "delete_user":
         delete_user_dialog(arg)
+    elif kind == "delete_intent":
+        delete_intent_dialog(arg)
 
 
 def open_dialog(kind: str, arg=None) -> None:
@@ -2098,6 +2107,47 @@ def _remove_intent_from_pool(intent_id: str, reason: str) -> None:
     intent["excluded_reason"] = reason
     intent["updated_at"] = now_str()
     pool._save_intents()
+
+
+def delete_intent_record(intent_id: str) -> None:
+    intent = pool.get_intent(intent_id) or {}
+    if not intent:
+        return
+    for inv in list(pool.invitations.values()):
+        if intent_id not in (inv.get("from_intent"), inv.get("to_intent")):
+            continue
+        inv["status"] = "cancelled"
+        inv["updated_at"] = now_str()
+        from_iid = inv.get("from_intent")
+        to_iid = inv.get("to_intent")
+        from_uid = inv.get("from_user")
+        to_uid = inv.get("to_user")
+        store.remove_member(from_iid, to_uid)
+        store.remove_member(to_iid, from_uid)
+        store.cancel_team_link(inv.get("invitation_id"))
+    for member in list(store.list_members(intent_id)):
+        store.remove_member(intent_id, member)
+    pool.delete_intent(intent_id)
+    pool._save_invitations()
+
+
+@st.dialog("删除参赛意向")
+def delete_intent_dialog(intent_id: str) -> None:
+    intent = pool.get_intent(intent_id) or {}
+    st.markdown("确定要删除这条参赛意向吗？删除后将从参赛池移除。")
+    if intent:
+        st.caption(
+            "比赛：%s" % _competition_display(intent.get("competition") or "")
+        )
+    c1, c2 = st.columns(2)
+    if c1.button("确定删除", use_container_width=True, type="primary"):
+        st.session_state.dialog_request = None
+        delete_intent_record(intent_id)
+        _set_flash("已删除该参赛意向。")
+        st.rerun()
+    if c2.button("取消", use_container_width=True):
+        st.session_state.dialog_request = None
+        st.rerun()
 
 
 def _competition_range_for(intent: dict):
@@ -3588,10 +3638,18 @@ def render_history_section() -> None:
         "removed": "已从参赛池移除",
         "deleted": "已注销",
     }
+    unique_intents = []
+    seen_competitions = set()
     for intent in reversed(intents):
-        iid = intent.get("intent_id", "")
         if intent.get("status") == "deleted":
             continue
+        comp_key = _normalize_competition_name(intent.get("competition") or "")
+        if comp_key and comp_key in seen_competitions:
+            continue
+        seen_competitions.add(comp_key)
+        unique_intents.append(intent)
+    for intent in unique_intents:
+        iid = intent.get("intent_id", "")
         new_items = _new_candidates_for(intent)
         comp_range = _competition_range_for(intent)
         try:
@@ -3636,6 +3694,8 @@ def render_history_section() -> None:
                 st.session_state.history_view_intent = iid
                 _set_flash("重新匹配完成，新增 %d 位伙伴，原有匹配已保留。" % count)
                 st.rerun()
+            if st.button("删除意向", key="hist_delete_%s" % iid, use_container_width=True):
+                open_dialog("delete_intent", iid)
         st.markdown("</div>", unsafe_allow_html=True)
     render_history_detail()
 
@@ -4318,15 +4378,22 @@ def _add_competition_to_table(name: str, low: int, high: int) -> bool:
 
 def render_admin_tab() -> None:
     pool_ok = _reload_pool()
+    if len(pool.users) <= 1:
+        neon_store.invalidate_cache("users")
+        pool_ok = _reload_pool() or pool_ok
     _reload_store()
+    if not (store.data.get("admins") or []):
+        neon_store.invalidate_cache("app_extra")
+        _reload_store()
     if not pool_ok:
         st.warning("云端用户读取失败，当前展示缓存数据；已停止写入，避免覆盖 Neon 数据。")
-    if not current_is_admin:
-        st.error("只有管理员可以进入管理中心。")
-        return
-
     viewer_user = pool.get_user(current_uid) or current_user
     viewer_is_super = _is_super_admin(viewer_user)
+    if not (current_is_admin or viewer_is_super):
+        st.error("只有管理员可以进入管理中心。")
+        return
+    if viewer_is_super and not current_is_admin:
+        st.session_state.is_admin = True
     st.subheader("管理中心")
     if viewer_is_super:
         _render_page_summary("以好友列表式展示所有注册用户；可查看完整资料、分配/收回管理员、注销普通用户。")

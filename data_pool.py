@@ -414,7 +414,12 @@ class DataPool:
             merged = dict(latest_users)
             for uid, user in self.users.items():
                 if snapshot.get(uid) != user:
-                    merged[uid] = copy.deepcopy(user)
+                    merged_user = copy.deepcopy(user)
+                    if not merged_user.get("avatar"):
+                        latest_user = latest_users.get(uid) or {}
+                        if latest_user.get("avatar"):
+                            merged_user["avatar"] = latest_user["avatar"]
+                    merged[uid] = merged_user
             for uid in list(snapshot.keys()):
                 if uid not in self.users:
                     merged.pop(uid, None)
@@ -629,6 +634,14 @@ class DataPool:
         intent["updated_at"] = now_str()
         self._save_intents()
         return intent_id
+
+    def delete_intent(self, intent_id: str) -> bool:
+        """删除参赛意向并从参赛池移除。"""
+        if intent_id not in self.intents:
+            return False
+        self.intents.pop(intent_id, None)
+        self._save_intents()
+        return True
 
     def get_intent(self, intent_id: str) -> Optional[Dict[str, Any]]:
         return self.intents.get(intent_id)
