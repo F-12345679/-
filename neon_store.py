@@ -108,13 +108,37 @@ def invalidate_cache(key: str = "") -> None:
         _CACHE.clear()
 
 
+def _is_empty_payload(data) -> bool:
+    if data is None:
+        return True
+    if not isinstance(data, dict):
+        return False
+    for key, value in data.items():
+        if key == "next_seq":
+            continue
+        if value:
+            return False
+    return True
+
+
+def _log_users(data, source: str) -> None:
+    users = (data or {}).get("users", {}) if isinstance(data, dict) else {}
+    avatars = sum(1 for user in users.values() if isinstance(user, dict) and user.get("avatar"))
+    print(
+        "[neon_store] %s users=%d avatars=%d" % (source, len(users), avatars),
+        file=sys.stderr,
+    )
+
+
 def load_json_checked(key: str, default):
-    """读取 JSON，返回 (是否读取成功, 数据)。30 秒内复用缓存。"""
+    """读取 JSON，返回 (是否读取成功, 数据)。30 秒内复用缓存，空数据不缓存。"""
     if not is_configured():
         return True, default
     now = time.time()
     cached = _CACHE.get(key)
     if cached is not None and now - cached[0] <= _CACHE_TTL:
+        if key == "users":
+            _log_users(cached[1], "缓存命中")
         return True, copy.deepcopy(cached[1])
     last_error = None
     for attempt in range(2):
@@ -125,10 +149,22 @@ def load_json_checked(key: str, default):
                     cur.execute("SELECT data FROM json_store WHERE _id = %s", (key,))
                     row = cur.fetchone()
             if row is None or row[0] is None:
-                _CACHE[key] = (now, copy.deepcopy(default))
+                if key == "users":
+                    _log_users(default, "读到空数据")
+                if cached is not None:
+                    return True, copy.deepcopy(cached[1])
                 return True, copy.deepcopy(default)
-            _CACHE[key] = (now, copy.deepcopy(row[0]))
-            return True, copy.deepcopy(row[0])
+            data = row[0]
+            if _is_empty_payload(data):
+                if key == "users":
+                    _log_users(data, "读到空数据")
+                if cached is not None:
+                    return True, copy.deepcopy(cached[1])
+                return True, copy.deepcopy(data)
+            _CACHE[key] = (now, copy.deepcopy(data))
+            if key == "users":
+                _log_users(data, "Neon读取")
+            return True, copy.deepcopy(data)
         except Exception as exc:
             last_error = exc
             _reset_conn()
@@ -139,6 +175,8 @@ def load_json_checked(key: str, default):
             "[neon_store] 读取失败 %s，使用上次缓存: %s" % (key, last_error),
             file=sys.stderr,
         )
+        if key == "users":
+            _log_users(cached[1], "失败回退缓存")
         return True, copy.deepcopy(cached[1])
     print("[neon_store] 读取失败 %s: %s" % (key, last_error), file=sys.stderr)
     return False, default

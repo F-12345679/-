@@ -326,6 +326,17 @@ class DataPool:
         if self.cloud_read_failed:
             return
 
+        if neon_store.is_configured():
+            new_users = users_data.get("users", {}) or {}
+            new_intents = intents_data.get("intents", {}) or {}
+            if (self.users and not new_users) or (self.intents and not new_intents):
+                print(
+                    "[data_pool] 云端读到可疑空数据，保留当前内存数据 users=%d intents=%d"
+                    % (len(self.users), len(self.intents)),
+                    file=sys.stderr,
+                )
+                return
+
         self.users = users_data.get("users", {}) or {}
         self.next_user_seq = int(users_data.get("next_seq", 1))
 
@@ -349,6 +360,12 @@ class DataPool:
         self._users_snapshot = copy.deepcopy(self.users)
         self._intents_snapshot = copy.deepcopy(self.intents)
         self._invitations_snapshot = copy.deepcopy(self.invitations)
+        avatars = sum(1 for user in self.users.values() if user.get("avatar"))
+        print(
+            "[data_pool] 加载完成 users=%d avatars=%d intents=%d"
+            % (len(self.users), avatars, len(self.intents)),
+            file=sys.stderr,
+        )
 
     def reload(self) -> bool:
         """强制从 Neon/本地重新全量读取；读取失败时保留当前内存数据并返回 False。"""

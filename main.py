@@ -1486,8 +1486,6 @@ def _user_is_deleted(user_id: str) -> bool:
 
 
 def render_admin_invite_banner() -> None:
-    if not _reload_store():
-        return
     inviter_uid = store.get_admin_inviter(current_uid)
     if not inviter_uid:
         return
@@ -1507,6 +1505,8 @@ def render_admin_invite_banner() -> None:
         type="primary",
     ):
         store.accept_admin_invite(current_uid)
+        st.session_state.is_admin = True
+        st.session_state.admin_flag_user = current_uid
         for note in store.find_unread_by_kind(current_uid, "admin_invite"):
             store.mark_notification_read(note.get("notification_id"), current_uid)
         store.notify(
@@ -1575,8 +1575,11 @@ def _restore_login_from_query() -> None:
         return
     if _auth_token(user_id, user) != token:
         return
+    _reload_store()
     if _is_super_admin(user):
         store.add_admin(user_id)
+    st.session_state.is_admin = _is_admin(user_id)
+    st.session_state.admin_flag_user = user_id
     st.session_state.logged_in = True
     st.session_state.current_user_id = user_id
     st.session_state.page = "chat"
@@ -1587,9 +1590,13 @@ def _restore_login_from_query() -> None:
 
 
 def perform_login(user_id: str) -> None:
+    _reload_pool()
+    _reload_store()
     user = pool.get_user(user_id) or {}
     if _is_super_admin(user):
         store.add_admin(user_id)
+    st.session_state.is_admin = _is_admin(user_id)
+    st.session_state.admin_flag_user = user_id
     _remember_login(user_id, user)
     st.session_state.logged_in = True
     st.session_state.current_user_id = user_id
@@ -1611,6 +1618,8 @@ def logout() -> None:
     st.session_state.login_error = None
     st.session_state.pending_phone_uid = None
     st.session_state.need_avatar_confirm = False
+    st.session_state.pop("is_admin", None)
+    st.session_state.pop("admin_flag_user", None)
     st.session_state.pop("conversation_choice", None)
     st.session_state.pop("group_choice", None)
     init_chat()
@@ -1787,7 +1796,13 @@ _render_bg_music(on_light=True)
 # ----------------------------------------------------------------------
 current_uid = st.session_state.get("current_user_id")
 current_user = pool.get_user(current_uid) or {}
-current_is_admin = _is_admin(current_uid)
+if (
+    st.session_state.get("admin_flag_user") != current_uid
+    or "is_admin" not in st.session_state
+):
+    st.session_state.is_admin = _is_admin(current_uid)
+    st.session_state.admin_flag_user = current_uid
+current_is_admin = bool(st.session_state.get("is_admin"))
 render_admin_invite_banner()
 
 
@@ -4306,7 +4321,7 @@ def render_admin_tab() -> None:
     _reload_store()
     if not pool_ok:
         st.warning("云端用户读取失败，当前展示缓存数据；已停止写入，避免覆盖 Neon 数据。")
-    if not _is_admin(current_uid):
+    if not current_is_admin:
         st.error("只有管理员可以进入管理中心。")
         return
 

@@ -12,6 +12,7 @@ import base64
 import json
 import os
 import re
+import sys
 import time
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
@@ -148,6 +149,13 @@ class SocialStore:
                 return
             if not isinstance(loaded, dict):
                 loaded = {}
+            if not loaded and self.data:
+                print(
+                    "[social_store] 云端读到空数据，保留当前内存数据 admins=%d"
+                    % len(self.data.get("admins") or []),
+                    file=sys.stderr,
+                )
+                return
         else:
             if not os.path.exists(self.path):
                 self.data = default
@@ -162,6 +170,14 @@ class SocialStore:
         for key, value in default.items():
             loaded.setdefault(key, value)
         self.data = loaded
+        print(
+            "[social_store] 加载完成 admins=%d deleted=%d"
+            % (
+                len(self.data.get("admins") or []),
+                len(self.data.get("deleted_users") or []),
+            ),
+            file=sys.stderr,
+        )
 
     def reload(self) -> bool:
         """强制从 Neon/本地重新全量读取；失败时保留当前内存数据并返回 False。"""
