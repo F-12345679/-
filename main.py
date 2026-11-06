@@ -1115,18 +1115,28 @@ def _reload_pool() -> bool:
     """兼容旧缓存对象：没有 reload() 时直接重新实例化 DataPool。"""
     global pool
     reload_fn = getattr(pool, "reload", None)
+    ok = False
     if callable(reload_fn):
         try:
-            return bool(reload_fn())
+            ok = bool(reload_fn())
         except Exception:
-            return False
-    try:
-        fresh = DataPool(BASE_DIR)
-        pool = fresh
-        st.session_state.pool = fresh
-        return True
-    except Exception:
-        return False
+            ok = False
+    else:
+        try:
+            fresh = DataPool(BASE_DIR)
+            pool = fresh
+            st.session_state.pool = fresh
+            ok = True
+        except Exception:
+            ok = False
+    if ok:
+        ensure = globals().get("_ensure_super_admin")
+        if callable(ensure):
+            try:
+                ensure()
+            except Exception:
+                pass
+    return ok
 
 
 if "logged_in" not in st.session_state:
@@ -1149,9 +1159,35 @@ def _is_super_admin(user: dict) -> bool:
 
 
 def _ensure_super_admin() -> None:
+    found = False
     for uid, user in pool.users.items():
         if _is_super_admin(user):
-            store.add_admin(uid)
+            try:
+                store.add_admin(uid)
+            except Exception:
+                pass
+            found = True
+    if found or getattr(pool, "cloud_read_failed", False):
+        return
+    try:
+        uid = pool.find_user_by_nickname(SUPER_NICKNAME)
+        if uid:
+            user = pool.get_user(uid) or {}
+            user["phone"] = SUPER_PHONE
+            user["updated_at"] = now_str()
+            pool._save_users()
+        else:
+            uid = pool.upsert_user(
+                {
+                    "nickname": SUPER_NICKNAME,
+                    "phone": SUPER_PHONE,
+                    "free_time": ["随时"],
+                    "gender_preference": "不限",
+                }
+            )
+        store.add_admin(uid)
+    except Exception:
+        pass
 
 
 _ensure_super_admin()
@@ -1728,13 +1764,17 @@ def render_login() -> None:
 
 _restore_login_from_query()
 
-if (
-    not st.session_state.logged_in
-    or not st.session_state.current_user_id
-    or not pool.get_user(st.session_state.current_user_id)
-    or _user_is_deleted(st.session_state.current_user_id)
-):
+if not st.session_state.get("logged_in") or not st.session_state.get("current_user_id"):
     render_login()
+    st.stop()
+
+if not pool.get_user(st.session_state.current_user_id):
+    _reload_pool()
+
+if not pool.get_user(st.session_state.current_user_id):
+    if _user_is_deleted(st.session_state.current_user_id):
+        logout()
+    st.warning("用户资料正在从云端同步，请稍后刷新页面重试。")
     st.stop()
 
 
@@ -3096,9 +3136,27 @@ def render_confirmation() -> None:
         st.rerun()
 
 
+def _dedupe_items_by_user(items) -> list:
+    """同一用户只保留匹配度最高的一条。"""
+    best = {}
+    for item in items or []:
+        uid = str(item.get("user_id") or "")
+        if not uid:
+            continue
+        try:
+            score = float(item.get("score", 0) or 0)
+        except (TypeError, ValueError):
+            score = 0.0
+        if uid not in best or score > float(best[uid].get("score", 0) or 0):
+            best[uid] = item
+    return sorted(best.values(), key=lambda x: -float(x.get("score", 0) or 0))
+
+
 def _snapshot_items(result: dict):
     items = []
-    for item in list(result.get("recommended", [])) + list(result.get("alternatives", [])):
+    for item in _dedupe_items_by_user(
+        list(result.get("recommended", [])) + list(result.get("alternatives", []))
+    ):
         items.append(
             {
                 "intent_id": item.get("intent_id"),
@@ -3133,6 +3191,9 @@ def finalize_matching() -> None:
         "nickname": collected.get("nickname", ""),
         "contact": contact,
         "contact_type": matcher.detect_contact_type(contact),
+        "qq": collected.get("qq", ""),
+        "wechat": collected.get("wechat", ""),
+        "email": collected.get("email", ""),
         "school": collected.get("school", ""),
         "major": collected.get("major", ""),
         "free_time": collected.get("free_time", []),
@@ -3140,12 +3201,6 @@ def finalize_matching() -> None:
         "interests": collected.get("interests", []),
     }
     user_id = pool.update_user(current_uid, user_data)
-    user = pool.get_user(user_id) or {}
-    user["qq"] = collected.get("qq", "")
-    user["wechat"] = collected.get("wechat", "")
-    user["email"] = collected.get("email", "")
-    user["updated_at"] = now_str()
-    pool._save_users()
 
     intent_data = {
         "competition": competition,
@@ -3324,8 +3379,13 @@ def render_match_results() -> None:
     )
 
     host_intent_id = st.session_state.get("host_intent_id")
-    recommended = result.get("recommended", [])
-    alternatives = result.get("alternatives", [])
+    recommended = _dedupe_items_by_user(result.get("recommended", []))
+    recommended_users = {x.get("user_id") for x in recommended}
+    alternatives = [
+        x
+        for x in _dedupe_items_by_user(result.get("alternatives", []))
+        if x.get("user_id") not in recommended_users
+    ]
 
     if not recommended and not alternatives:
         st.info(
@@ -3387,8 +3447,7 @@ def _new_candidates_for(intent: dict, user_id: str = ""):
         if item.get("user_id") in teamed:
             continue
         fresh.append(item)
-    fresh.sort(key=lambda x: -float(x.get("score", 0)))
-    return fresh
+    return _dedupe_items_by_user(fresh)
 
 
 def rematch_intent(intent_id: str) -> int:
@@ -3407,18 +3466,22 @@ def rematch_intent(intent_id: str) -> int:
     snapshot = store.get_snapshot(intent_id)
     old = list(snapshot.get("candidates", []))
     old_ids = {x.get("intent_id") for x in old}
+    old_users = {x.get("user_id") for x in old}
     fresh = []
     for iid, item in mapping.items():
-        if iid not in old_ids:
-            fresh.append(
-                {
-                    "intent_id": iid,
-                    "user_id": item.get("user_id"),
-                    "score": item.get("score", 0),
-                    "nickname": item.get("nickname", ""),
-                    "competition": item.get("competition", ""),
-                }
-            )
+        if iid in old_ids or item.get("user_id") in old_users:
+            continue
+        fresh.append(
+            {
+                "intent_id": iid,
+                "user_id": item.get("user_id"),
+                "score": item.get("score", 0),
+                "nickname": item.get("nickname", ""),
+                "competition": item.get("competition", ""),
+            }
+        )
+    old = _dedupe_items_by_user(old)
+    fresh = _dedupe_items_by_user(fresh)
     store.save_snapshot(intent_id, old + fresh)
     store.mark_history_seen(current_uid, intent_id, 0)
     return len(fresh)
@@ -3433,15 +3496,20 @@ def render_history_detail() -> None:
         st.session_state.history_view_intent = None
         return
     snapshot = store.get_snapshot(intent_id)
-    records = list(snapshot.get("candidates", []))
+    records = _dedupe_items_by_user(list(snapshot.get("candidates", [])))
     mapping = _current_match_map(intent_id)
     seen_ids = {x.get("intent_id") for x in records}
+    seen_users = {x.get("user_id") for x in records}
     teamed = _teamed_user_ids(current_uid)
-    fresh = [
-        item
-        for iid, item in mapping.items()
-        if iid not in seen_ids and item.get("user_id") not in teamed
-    ]
+    fresh = _dedupe_items_by_user(
+        [
+            item
+            for iid, item in mapping.items()
+            if iid not in seen_ids
+            and item.get("user_id") not in seen_users
+            and item.get("user_id") not in teamed
+        ]
+    )
 
     st.markdown("---")
     header_left, header_right = st.columns([4, 1])

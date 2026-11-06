@@ -821,6 +821,18 @@ def find_candidates(
 
     # 按分数降序；同分时按 user_id / intent_id 稳定排序
     results.sort(key=lambda x: (-float(x["score"]), str(x["user_id"]), str(x["intent_id"])))
+
+    # 同一个用户可能有多条意向，按 user_id 去重，保留分数最高的一条
+    deduped: List[Dict[str, Any]] = []
+    seen_users: Set[str] = set()
+    for item in results:
+        uid = str(item.get("user_id") or "")
+        if uid in seen_users:
+            continue
+        seen_users.add(uid)
+        deduped.append(item)
+    results = deduped
+
     recommended = [x for x in results if float(x["score"]) > 0]
     alternatives = [x for x in results if float(x["score"]) <= 0]
 
