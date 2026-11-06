@@ -107,6 +107,7 @@ class SocialStore:
         self.path = os.path.join(self.base_dir, "app_extra.json")
         self.key = neon_store.file_key(self.path)
         self.data: Dict[str, Any] = {}
+        self.cloud_read_failed = False
         self._load()
 
     # ------------------------------------------------------------------
@@ -138,9 +139,13 @@ class SocialStore:
 
     def _load(self) -> None:
         default = self._default_data()
+        self.cloud_read_failed = False
         if neon_store.is_configured():
-            # 云端模式：从 Neon 读整份数据
-            loaded = neon_store.load_json(self.key, None)
+            # 云端模式：从 Neon 读整份数据；读取失败时保留当前内存数据
+            ok, loaded = neon_store.load_json_checked(self.key, None)
+            if not ok:
+                self.cloud_read_failed = True
+                return
             if not isinstance(loaded, dict):
                 loaded = {}
         else:
@@ -158,9 +163,18 @@ class SocialStore:
             loaded.setdefault(key, value)
         self.data = loaded
 
+    def reload(self) -> bool:
+        """强制从 Neon/本地重新全量读取；失败时保留当前内存数据并返回 False。"""
+        self._load()
+        return not self.cloud_read_failed
+
     def _save(self) -> None:
-        if neon_store.save_json(self.key, self.data):
-            return
+        if neon_store.is_configured():
+            if self.cloud_read_failed:
+                raise RuntimeError("云端数据读取失败，已停止写入以保护现有数据。")
+            if neon_store.save_json(self.key, self.data):
+                return
+            raise RuntimeError("Neon 写入失败，请检查网络或数据库连接后重试。")
         payload = json.dumps(self.data, ensure_ascii=False, indent=2)
         last_error: Optional[BaseException] = None
         for attempt in range(5):

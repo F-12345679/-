@@ -21,6 +21,7 @@ data_pool.py — 参赛池数据层（用户表 + 参赛意向表 + 邀请 + 站
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -233,17 +234,26 @@ class DataPool:
         self.next_invitation_seq = 1
         self.next_message_seq = 1
 
+        self.cloud_read_failed = False
+        self._users_snapshot: Dict[str, Dict[str, Any]] = {}
+        self._intents_snapshot: Dict[str, Dict[str, Any]] = {}
+        self._invitations_snapshot: Dict[str, Dict[str, Any]] = {}
+
         self._load()
 
     # ------------------------------------------------------------------
     # 读写 JSON
     # ------------------------------------------------------------------
-    @staticmethod
-    def _read_json(path: str, default: Any) -> Any:
+    def _read_json(self, path: str, default: Any) -> Any:
         key = neon_store.file_key(path)
         if neon_store.is_configured():
-            # 云端模式：从 Neon 读，未读到才用默认值
-            return neon_store.load_json(key, default)
+            ok, loaded = neon_store.load_json_checked(key, None)
+            if not ok:
+                self.cloud_read_failed = True
+                return default
+            if loaded is None:
+                return default
+            return loaded
         if not os.path.exists(path):
             return default
         try:
@@ -253,16 +263,20 @@ class DataPool:
             # 文件损坏时退回默认值，避免整个应用无法启动
             return default
 
-    @staticmethod
-    def _write_json(path: str, data: Any) -> None:
+    def _write_json(self, path: str, data: Any) -> None:
         """
-        写入数据：云端模式先写 Neon（成功即返回）；否则写本地 JSON（先临时文件再原子替换）。
-        Windows 下文件被占用时会抛 PermissionError，这里做多次重试；
-        仍失败则退回直接写入，最后仍失败只记录错误、不打断页面运行。
+        写入数据：云端模式只写 Neon；读取失败后拒绝写入，避免用空数据覆盖云端。
+        本地模式仍使用“临时文件 + 原子替换”。
         """
         key = neon_store.file_key(path)
-        if neon_store.save_json(key, data):
-            return
+        if neon_store.is_configured():
+            if self.cloud_read_failed:
+                raise RuntimeError(
+                    "云端数据读取失败，已停止写入以保护 Neon 中的现有用户和意向。"
+                )
+            if neon_store.save_json(key, data):
+                return
+            raise RuntimeError("Neon 写入失败，请检查网络或数据库连接后重试。")
         payload = json.dumps(data, ensure_ascii=False, indent=2)
         last_error: Optional[BaseException] = None
         for attempt in range(5):
@@ -299,21 +313,25 @@ class DataPool:
         )
 
     def _load(self) -> None:
+        self.cloud_read_failed = False
         users_data = self._read_json(self.users_path, {"next_seq": 1, "users": {}})
-        self.users = users_data.get("users", {}) or {}
-        self.next_user_seq = int(users_data.get("next_seq", 1))
-
         intents_data = self._read_json(self.intents_path, {"next_seq": 1, "intents": {}})
-        self.intents = intents_data.get("intents", {}) or {}
-        self.next_intent_seq = int(intents_data.get("next_seq", 1))
-
         inv_data = self._read_json(self.invitations_path, {"next_seq": 1, "invitations": {}})
-        self.invitations = inv_data.get("invitations", {}) or {}
-        self.next_invitation_seq = int(inv_data.get("next_seq", 1))
-
         msg_data = self._read_json(
             self.messages_path, {"next_seq": 1, "messages": {}}
         )
+        if self.cloud_read_failed:
+            return
+
+        self.users = users_data.get("users", {}) or {}
+        self.next_user_seq = int(users_data.get("next_seq", 1))
+
+        self.intents = intents_data.get("intents", {}) or {}
+        self.next_intent_seq = int(intents_data.get("next_seq", 1))
+
+        self.invitations = inv_data.get("invitations", {}) or {}
+        self.next_invitation_seq = int(inv_data.get("next_seq", 1))
+
         self.messages = msg_data.get("messages", {}) or {}
         self.next_message_seq = int(msg_data.get("next_seq", 1))
 
@@ -324,6 +342,15 @@ class DataPool:
             self.next_invitation_seq, self._max_seq(self.invitations.keys(), "IV") + 1
         )
         self.next_message_seq = max(self.next_message_seq, self._max_msg_id() + 1)
+
+        self._users_snapshot = copy.deepcopy(self.users)
+        self._intents_snapshot = copy.deepcopy(self.intents)
+        self._invitations_snapshot = copy.deepcopy(self.invitations)
+
+    def reload(self) -> bool:
+        """强制从 Neon/本地重新全量读取；读取失败时保留当前内存数据并返回 False。"""
+        self._load()
+        return not self.cloud_read_failed
 
     @staticmethod
     def _max_seq(keys: Iterable[str], prefix: str) -> int:
@@ -343,15 +370,84 @@ class DataPool:
                     best = max(best, int(m.group(1)))
         return best
 
+    def _cloud_latest(self, key: str, container: str):
+        ok, latest = neon_store.load_json_checked(key, None)
+        if not ok:
+            raise RuntimeError("Neon 读取失败，已停止写入以保护现有数据。")
+        if not isinstance(latest, dict):
+            latest = {}
+        records = latest.get(container)
+        if not isinstance(records, dict):
+            records = {}
+        return latest, records
+
     def _save_users(self) -> None:
+        if neon_store.is_configured():
+            if self.cloud_read_failed:
+                raise RuntimeError("云端用户读取失败，已停止写入以保护现有账号。")
+            latest, latest_users = self._cloud_latest("users", "users")
+            snapshot = self._users_snapshot or {}
+            if not latest_users and snapshot:
+                raise RuntimeError(
+                    "Neon users 表读取为空，已停止写入，避免覆盖已有用户。"
+                )
+            merged = dict(latest_users)
+            for uid, user in self.users.items():
+                if snapshot.get(uid) != user:
+                    merged[uid] = copy.deepcopy(user)
+            for uid in list(snapshot.keys()):
+                if uid not in self.users:
+                    merged.pop(uid, None)
+            next_seq = max(
+                self.next_user_seq,
+                int(latest.get("next_seq", 1) or 1),
+                self._max_seq(merged.keys(), "U") + 1,
+            )
+            payload = {"next_seq": next_seq, "users": merged}
+            if not neon_store.save_json("users", payload):
+                raise RuntimeError("Neon 用户写入失败，请稍后重试。")
+            self.users = merged
+            self.next_user_seq = next_seq
+            self._users_snapshot = copy.deepcopy(merged)
+            return
         self._write_json(
             self.users_path, {"next_seq": self.next_user_seq, "users": self.users}
         )
+        self._users_snapshot = copy.deepcopy(self.users)
 
     def _save_intents(self) -> None:
+        if neon_store.is_configured():
+            if self.cloud_read_failed:
+                raise RuntimeError("云端意向读取失败，已停止写入以保护现有意向。")
+            latest, latest_intents = self._cloud_latest("intents", "intents")
+            snapshot = self._intents_snapshot or {}
+            if not latest_intents and snapshot:
+                raise RuntimeError(
+                    "Neon intents 表读取为空，已停止写入，避免覆盖已有意向。"
+                )
+            merged = dict(latest_intents)
+            for iid, intent in self.intents.items():
+                if snapshot.get(iid) != intent:
+                    merged[iid] = copy.deepcopy(intent)
+            for iid in list(snapshot.keys()):
+                if iid not in self.intents:
+                    merged.pop(iid, None)
+            next_seq = max(
+                self.next_intent_seq,
+                int(latest.get("next_seq", 1) or 1),
+                self._max_seq(merged.keys(), "I") + 1,
+            )
+            payload = {"next_seq": next_seq, "intents": merged}
+            if not neon_store.save_json("intents", payload):
+                raise RuntimeError("Neon 意向写入失败，请稍后重试。")
+            self.intents = merged
+            self.next_intent_seq = next_seq
+            self._intents_snapshot = copy.deepcopy(merged)
+            return
         self._write_json(
             self.intents_path, {"next_seq": self.next_intent_seq, "intents": self.intents}
         )
+        self._intents_snapshot = copy.deepcopy(self.intents)
 
     def _save_invitations(self) -> None:
         self._write_json(
@@ -596,84 +692,7 @@ class DataPool:
     # ------------------------------------------------------------------
     # 组队确认与提醒
     # ------------------------------------------------------------------
-    def generate_team_reminders(
-        self, interval_hours: int = 24, now: Optional[datetime] = None
-    ) -> List[Dict[str, Any]]:
-        """
-        对仍在池中、未组队、且距上次提醒超过 interval_hours 的意向生成提醒。
-        组队提醒由界面上的“检查组队提醒”按钮触发；默认 24 小时。
-        返回本次被提醒的记录列表。
-        """
-        now = now or datetime.now()
-        deadline = now - timedelta(hours=interval_hours)
-        reminded: List[Dict[str, Any]] = []
-        changed = False
-        for intent in self.intents.values():
-            if intent.get("status") != "matching":
-                continue
-            if self.is_intent_expired(intent, now.date()):
-                continue
-            last = intent.get("last_reminded_at")
-            last_dt = None
-            if last:
-                try:
-                    last_dt = datetime.strptime(str(last), ISO_FMT)
-                except ValueError:
-                    last_dt = None
-            if last_dt is not None and last_dt > deadline:
-                continue
-            intent["last_reminded_at"] = now.strftime(ISO_FMT)
-            intent["updated_at"] = now.strftime(ISO_FMT)
-            changed = True
-            user = self.users.get(intent.get("user_id", ""), {})
-            reminded.append(
-                {
-                    "intent_id": intent["intent_id"],
-                    "user_id": intent.get("user_id"),
-                    "nickname": user.get("nickname", ""),
-                    "competition": intent.get("competition", ""),
-                    "reminded_at": intent["last_reminded_at"],
-                }
-            )
-        if changed:
-            self._save_intents()
-        return reminded
-
-    def needs_team_response(self, intent: Dict[str, Any]) -> bool:
-        """是否有一条尚未回应的组队提醒。"""
-        if intent.get("status") != "matching":
-            return False
-        last = intent.get("last_reminded_at")
-        if not last:
-            return False
-        resp = intent.get("last_reminded_response_at")
-        return not resp or str(resp) < str(last)
-
-    def respond_team_reminder(
-        self, intent_id: str, teamed: bool, now: Optional[datetime] = None
-    ) -> str:
-        """
-        用户回应组队提醒：
-        - 已组队：intent 状态改为 teamed，从候选池移除；
-        - 未组队：状态保持 matching，继续留在池中。
-        now 参数便于测试时推进时间。
-        """
-        intent = self.intents.get(intent_id)
-        if intent is None:
-            raise KeyError("意向不存在: %s" % intent_id)
-        stamp = (now or datetime.now()).strftime(ISO_FMT)
-        intent["last_reminded_response_at"] = stamp
-        intent["team_confirmed"] = bool(teamed)
-        intent["updated_at"] = stamp
-        if teamed:
-            intent["status"] = "teamed"
-            user = self.users.get(intent.get("user_id", ""))
-            if user is not None:
-                user["is_teamed"] = True
-                user["updated_at"] = stamp
-                self._save_users()
-        self._save_intents()
-        return intent["status"]
+    
 
     # ------------------------------------------------------------------
     # 邀请状态机

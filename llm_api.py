@@ -104,8 +104,16 @@ except Exception:
 
 
 def get_api_key() -> str:
-    """读取 DeepSeek Key（不在界面/日志中输出具体内容）。"""
-    return str(os.environ.get("DEEPSEEK_API_KEY", "")).strip()
+    """读取 DeepSeek Key（环境变量或 Streamlit Secrets，不在界面/日志中输出）。"""
+    key = str(os.environ.get("DEEPSEEK_API_KEY", "")).strip()
+    if key:
+        return key
+    try:
+        import streamlit as st  # type: ignore
+
+        return str(st.secrets.get("DEEPSEEK_API_KEY", "")).strip()
+    except Exception:
+        return ""
 
 
 def has_api_key() -> bool:

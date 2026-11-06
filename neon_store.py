@@ -10,6 +10,7 @@ neon_store.py — 云端 JSON 存储桥接（Neon Postgres）
 
 import json
 import os
+import sys
 
 try:
     import psycopg2
@@ -17,6 +18,49 @@ try:
 except Exception:  # 未安装 psycopg2 时回退本地，不阻塞启动
     psycopg2 = None
     PgJson = None
+
+
+def _load_env_file() -> None:
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.exists(path):
+        return
+    try:
+        from dotenv import load_dotenv  # type: ignore
+
+        load_dotenv(path)
+        return
+    except Exception:
+        pass
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except OSError:
+        pass
+
+
+_load_env_file()
+
+try:
+    import streamlit as _st  # type: ignore
+
+    for _key in ("DATABASE_URL", "NEON_DATABASE_URL"):
+        if not os.environ.get(_key):
+            try:
+                _value = _st.secrets[_key]
+            except Exception:
+                _value = ""
+            if _value:
+                os.environ[_key] = str(_value)
+except Exception:
+    pass
 
 _DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("NEON_DATABASE_URL")
 _conn = None
@@ -43,10 +87,10 @@ def _ensure_table() -> None:
         conn.commit()
 
 
-def load_json(key: str, default):
-    """从 Neon 读一份 JSON；未启用/读取失败/无此 key 时返回 default。"""
+def load_json_checked(key: str, default):
+    """读取 JSON，返回 (是否读取成功, 数据)。缺少 key 视为成功并返回 default。"""
     if not is_configured():
-        return default
+        return True, default
     try:
         _ensure_table()
         with _get_conn() as conn:
@@ -54,29 +98,41 @@ def load_json(key: str, default):
                 cur.execute("SELECT data FROM json_store WHERE _id = %s", (key,))
                 row = cur.fetchone()
         if row is None or row[0] is None:
-            return default
-        return row[0]
-    except Exception:
-        return default
+            return True, default
+        return True, row[0]
+    except Exception as exc:
+        print("[neon_store] 读取失败 %s: %s" % (key, exc), file=sys.stderr)
+        return False, default
+
+
+def load_json(key: str, default):
+    """从 Neon 读一份 JSON；未启用/读取失败/无此 key 时返回 default。"""
+    _ok, data = load_json_checked(key, default)
+    return data
 
 
 def save_json(key: str, data) -> bool:
-    """把一份 JSON 写入 Neon（存在则覆盖）。成功返回 True；失败返回 False（调用方回退本地）。"""
+    """把一份 JSON 写入 Neon（存在则覆盖）。成功返回 True；失败返回 False。"""
     if not is_configured():
         return False
-    try:
-        _ensure_table()
-        with _get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO json_store (_id, data) VALUES (%s, %s) "
-                    "ON CONFLICT (_id) DO UPDATE SET data = EXCLUDED.data",
-                    (key, PgJson(data)),
-                )
-            conn.commit()
-        return True
-    except Exception:
-        return False
+    for attempt in range(3):
+        try:
+            _ensure_table()
+            with _get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO json_store (_id, data) VALUES (%s, %s) "
+                        "ON CONFLICT (_id) DO UPDATE SET data = EXCLUDED.data",
+                        (key, PgJson(data)),
+                    )
+                conn.commit()
+            return True
+        except Exception as exc:
+            print(
+                "[neon_store] 写入失败 %s（第 %d 次）: %s" % (key, attempt + 1, exc),
+                file=sys.stderr,
+            )
+    return False
 
 
 def file_key(path: str) -> str:

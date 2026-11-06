@@ -174,6 +174,90 @@ def _norm_name(name: Any) -> str:
     return text
 
 
+COMPETITION_GROUPS: List[Tuple[str, Tuple[str, ...]]] = [
+    (
+        "大创赛",
+        (
+            "大创赛",
+            "大创",
+            "大学生创新创业训练计划",
+            "大学生创新创业训练项目",
+            "大创项目",
+            "创新创业训练计划",
+        ),
+    ),
+    (
+        "中国国际大学生创新创业大赛",
+        (
+            "互联网+",
+            "互联网＋",
+            "国创",
+            "国创赛",
+            "中国国际大学生创新创业大赛",
+            "中国国际大学生创新大赛",
+            "中国国际大学生创新大赛2026",
+            "中国国际大学生创新大赛（2026）",
+            "中国国际互联网+大学生创新创业大赛",
+            "互联网+大学生创新创业大赛",
+            "互联网+大赛",
+            "互联网+比赛",
+            "互联网加",
+        ),
+    ),
+    (
+        "挑战杯",
+        (
+            "挑战杯",
+            "挑战杯中国大学生创业计划竞赛",
+            "挑战杯创业计划竞赛",
+            "挑战杯大学生创业大赛",
+            "小挑",
+            "创业计划竞赛",
+            "挑战杯课外学术科技作品竞赛",
+            "挑战杯课外学术科技作品大赛",
+            "课外学术科技作品竞赛",
+            "大挑",
+            "学术科技作品竞赛",
+        ),
+    ),
+]
+
+PREFERRED_CANONICAL_TABLE = {
+    "大创赛": "中国国际大学生创新大赛（2026）",
+    "中国国际大学生创新创业大赛": "中国国际大学生创新大赛（2026）",
+    "挑战杯": "“挑战杯”中国大学生创业计划竞赛",
+}
+
+
+def _canonical_key(value: Any) -> str:
+    text = str(value or "").lower().replace("＋", "+")
+    text = re.sub(r"[\s“”\"'（）()【】\[\]、，,·\-—_/]+", "", text)
+    return text
+
+
+_CANONICAL_LOOKUP: Dict[str, str] = {}
+for _canonical, _aliases in COMPETITION_GROUPS:
+    for _alias in _aliases:
+        _CANONICAL_LOOKUP[_canonical_key(_alias)] = _canonical
+
+
+def normalize_competition_name(name: Any, table: Optional[Dict[str, Any]] = None) -> str:
+    """把简称/别名归一化到统一比赛名；未收录名称保持原样。"""
+    key = _canonical_key(name)
+    if not key:
+        return ""
+    if key in _CANONICAL_LOOKUP:
+        return _CANONICAL_LOOKUP[key]
+    for alias_key, canonical in _CANONICAL_LOOKUP.items():
+        if len(alias_key) >= 4 and (alias_key in key or key in alias_key):
+            return canonical
+    if table:
+        info = competition_info(name, table)
+        if info is not None:
+            return info[0]
+    return str(name or "").strip()
+
+
 def _norm_token(value: Any) -> str:
     return str(value or "").strip().lower().replace(" ", "")
 
@@ -247,13 +331,16 @@ def jaccard(a: Iterable[Any], b: Iterable[Any]) -> float:
 # 比赛区间 / 创新类判断
 # ----------------------------------------------------------------------
 def competition_info(name: Any, table: Dict[str, Any]) -> Optional[Tuple[str, Dict[str, Any]]]:
-    """
-    在比赛表里查名称（支持别名/包含关系）。
+    """在比赛表里查名称（支持别名/包含关系）。
     返回 (标准比赛名, 配置) 或 None。
     """
     if not name:
         return None
     competitions = (table or {}).get("competitions", {}) or {}
+    raw_name = str(name or "").strip()
+    preferred = PREFERRED_CANONICAL_TABLE.get(raw_name)
+    if preferred and preferred in competitions:
+        return preferred, competitions[preferred]
     target = _norm_name(name)
 
     # 1) 精确/别名匹配
@@ -299,7 +386,11 @@ def get_competition_range(
         if low and high and 1 <= low <= high:
             return {"min": low, "max": high, "source": "confirmed",
                     "name": name, "matched_name": name}
-    info = competition_info(name, table)
+    canonical = normalize_competition_name(name, table)
+    if canonical == "挑战杯":
+        return {"min": 2, "max": 15, "source": "table",
+                "name": name, "matched_name": "挑战杯"}
+    info = competition_info(canonical or name, table)
     if info is not None:
         matched_name, cfg = info
         low = to_int(cfg.get("min"))
@@ -591,6 +682,11 @@ def hard_constraints(
         reasons.append("我方比赛不是创新类")
     if not _intent_innovation(cand_intent, table):
         reasons.append("对方比赛不是创新类")
+
+    host_comp = normalize_competition_name(host_intent.get("competition", ""), table)
+    cand_comp = normalize_competition_name(cand_intent.get("competition", ""), table)
+    if not host_comp or not cand_comp or host_comp != cand_comp:
+        reasons.append("比赛名称不一致")
 
     if not periods_overlap(
         host_intent.get("available_period"), cand_intent.get("available_period")

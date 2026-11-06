@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import html
+import io
 import json
 import os
 import re
@@ -166,6 +167,13 @@ def _plain_text(value) -> str:
     text = re.sub(r"<[^>]+>", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
+
+
+def _competition_display(value) -> str:
+    text = _plain_text(value)
+    if not text:
+        return ""
+    return matcher.normalize_competition_name(text, table)
 
 
 def _period_display(period) -> str:
@@ -1001,6 +1009,34 @@ def inject_global_style() -> None:
             border-color: #a7f3d0 !important;
             border-radius: 10px !important;
         }
+
+        /* 手机端：放大汉堡菜单并显示“菜单”文字 */
+        [data-testid="stSidebarCollapsedControl"] {
+            z-index: 1000000;
+        }
+        [data-testid="stSidebarCollapsedControl"] button {
+            min-width: 88px !important;
+            min-height: 46px !important;
+            padding: 0 14px !important;
+            border-radius: 14px !important;
+            background: rgba(220, 250, 236, 0.96) !important;
+            border: 1px solid #a7f3d0 !important;
+            box-shadow: 0 6px 18px rgba(6, 80, 52, 0.18) !important;
+            display: flex !important;
+            align-items: center !important;
+            gap: 6px !important;
+        }
+        [data-testid="stSidebarCollapsedControl"] button::after {
+            content: "菜单";
+            color: #0b7a51;
+            font-size: 14px;
+            font-weight: 800;
+        }
+        [data-testid="stSidebarCollapsedControl"] svg {
+            width: 20px;
+            height: 20px;
+            color: #0b7a51;
+        }
         </style>
         """.replace(
             "__BG_IMAGE__",
@@ -1063,8 +1099,6 @@ if "current_user_id" not in st.session_state:
     st.session_state.current_user_id = None
 if "chat" not in st.session_state:
     init_chat()
-if "last_reminders" not in st.session_state:
-    st.session_state.last_reminders = None
 if "last_expired" not in st.session_state:
     st.session_state.last_expired = None
 if "page" not in st.session_state:
@@ -1124,11 +1158,33 @@ def _find_user_by_phone(phone: str):
     return None
 
 
+def _compress_avatar_data_uri(data_uri: str, max_size: int = 256) -> str:
+    """头像入库前压缩到适合展示的尺寸，避免 Neon users 行过大导致读取超时。"""
+    if not data_uri.startswith("data:image/") or data_uri.startswith("data:image/svg"):
+        return data_uri
+    try:
+        _header, payload = data_uri.split(",", 1)
+        raw = base64.b64decode(payload)
+        from PIL import Image  # type: ignore
+
+        image = Image.open(io.BytesIO(raw))
+        image.thumbnail((max_size, max_size))
+        if image.mode not in ("RGB", "L"):
+            image = image.convert("RGB")
+        out = io.BytesIO()
+        image.save(out, format="JPEG", quality=82, optimize=True)
+        return "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode(
+            "ascii"
+        )
+    except Exception:
+        return data_uri
+
+
 def _save_avatar(user_id: str, data_uri: str) -> None:
     user = pool.get_user(user_id)
     if user is None or not data_uri:
         return
-    user["avatar"] = data_uri
+    user["avatar"] = _compress_avatar_data_uri(data_uri)
     user["updated_at"] = now_str()
     pool._save_users()
 
@@ -1145,7 +1201,8 @@ def _read_avatar_upload(uploaded) -> str:
     mime = getattr(uploaded, "type", "") or "image/png"
     if not str(mime).startswith("image/"):
         mime = "image/png"
-    return "data:%s;base64,%s" % (mime, base64.b64encode(data).decode("ascii"))
+    data_uri = "data:%s;base64,%s" % (mime, base64.b64encode(data).decode("ascii"))
+    return _compress_avatar_data_uri(data_uri)
 
 
 def _is_admin(user_id: str) -> bool:
@@ -1346,10 +1403,122 @@ def inject_login_style() -> None:
     )
 
 
+AUTH_SALT = "team-match-neon-2026"
+
+
+def _user_is_deleted(user_id: str) -> bool:
+    user = pool.get_user(user_id)
+    if user is not None:
+        return bool(user.get("deleted")) or bool(user.get("is_deleted"))
+    return store.is_deleted(user_id)
+
+
+def render_admin_invite_banner() -> None:
+    if not store.reload():
+        return
+    inviter_uid = store.get_admin_inviter(current_uid)
+    if not inviter_uid:
+        return
+    inviter = pool.get_user(inviter_uid) or {}
+    if not _is_super_admin(inviter):
+        store.reject_admin_invite(current_uid)
+        return
+    st.warning(
+        "『%s』邀请你成为管理员。同意后左侧会出现“管理后台”入口。"
+        % (inviter.get("nickname") or "超级管理员")
+    )
+    c1, c2 = st.columns(2)
+    if c1.button(
+        "同意成为管理员",
+        key="banner_admin_accept",
+        use_container_width=True,
+        type="primary",
+    ):
+        store.accept_admin_invite(current_uid)
+        for note in store.find_unread_by_kind(current_uid, "admin_invite"):
+            store.mark_notification_read(note.get("notification_id"), current_uid)
+        store.notify(
+            inviter_uid,
+            "『%s』已同意成为管理员。" % (current_user.get("nickname") or "对方"),
+            "admin_accepted",
+        )
+        _set_flash("你已成为管理员。")
+        st.rerun()
+    if c2.button("暂不", key="banner_admin_reject", use_container_width=True):
+        store.reject_admin_invite(current_uid)
+        for note in store.find_unread_by_kind(current_uid, "admin_invite"):
+            store.mark_notification_read(note.get("notification_id"), current_uid)
+        _set_flash("已忽略管理员邀请。")
+        st.rerun()
+
+
+def _auth_token(user_id: str, user: dict) -> str:
+    material = "%s|%s|%s|%s" % (
+        user_id,
+        user.get("nickname") or "",
+        user.get("phone") or "",
+        AUTH_SALT,
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _query_param(name: str) -> str:
+    try:
+        value = st.query_params.get(name, "")
+        if isinstance(value, list):
+            value = value[0] if value else ""
+        return str(value or "")
+    except Exception:
+        return ""
+
+
+def _remember_login(user_id: str, user: dict) -> None:
+    try:
+        st.query_params["uid"] = user_id
+        st.query_params["token"] = _auth_token(user_id, user)
+    except Exception:
+        pass
+
+
+def _clear_remembered_login() -> None:
+    try:
+        st.query_params.pop("uid", None)
+        st.query_params.pop("token", None)
+    except Exception:
+        try:
+            st.query_params.clear()
+        except Exception:
+            pass
+
+
+def _restore_login_from_query() -> None:
+    if st.session_state.get("logged_in"):
+        return
+    user_id = _query_param("uid")
+    token = _query_param("token")
+    if not user_id or not token:
+        return
+    user = pool.get_user(user_id)
+    if user is None or _user_is_deleted(user_id):
+        return
+    if _auth_token(user_id, user) != token:
+        return
+    if _is_super_admin(user):
+        store.add_admin(user_id)
+    st.session_state.logged_in = True
+    st.session_state.current_user_id = user_id
+    st.session_state.page = "chat"
+    st.session_state.login_error = None
+    st.session_state.pending_phone_uid = None
+    st.session_state.need_avatar_confirm = not bool(user.get("avatar"))
+    init_chat()
+
+
 def perform_login(user_id: str) -> None:
     user = pool.get_user(user_id) or {}
     if _is_super_admin(user):
         store.add_admin(user_id)
+    _remember_login(user_id, user)
     st.session_state.logged_in = True
     st.session_state.current_user_id = user_id
     st.session_state.page = "chat"
@@ -1363,6 +1532,7 @@ def perform_login(user_id: str) -> None:
 
 
 def logout() -> None:
+    _clear_remembered_login()
     st.session_state.logged_in = False
     st.session_state.current_user_id = None
     st.session_state.page = "chat"
@@ -1520,11 +1690,13 @@ def render_login() -> None:
             _render_bg_music(on_light=True)
 
 
+_restore_login_from_query()
+
 if (
     not st.session_state.logged_in
     or not st.session_state.current_user_id
     or not pool.get_user(st.session_state.current_user_id)
-    or store.is_deleted(st.session_state.current_user_id)
+    or _user_is_deleted(st.session_state.current_user_id)
 ):
     render_login()
     st.stop()
@@ -1540,6 +1712,7 @@ _render_bg_music(on_light=True)
 current_uid = st.session_state.get("current_user_id")
 current_user = pool.get_user(current_uid) or {}
 current_is_admin = _is_admin(current_uid)
+render_admin_invite_banner()
 
 
 def _accepted_invitations(user_id: str):
@@ -1718,10 +1891,10 @@ def _team_records_for(user_id: str):
     for inv in _accepted_invitations(user_id):
         host_iid = inv.get("from_intent") or ""
         host_intent = pool.get_intent(host_iid) or {}
-        competition = _plain_text(host_intent.get("competition") or "")
+        competition = _competition_display(host_intent.get("competition") or "")
         if not competition:
             other_iid = inv.get("to_intent") or ""
-            competition = _plain_text((pool.get_intent(other_iid) or {}).get("competition") or "")
+            competition = _competition_display((pool.get_intent(other_iid) or {}).get("competition") or "")
         key = "inv:%s" % (inv.get("invitation_id") or competition)
         rec = ensure(key, competition)
         rec["user_ids"].update(
@@ -1734,7 +1907,7 @@ def _team_records_for(user_id: str):
         rec["sources"].add("invitation")
 
     for link in store.list_team_links(user_id):
-        competition = _plain_text(link.get("competition") or "")
+        competition = _competition_display(link.get("competition") or "")
         key = "link:%s" % (link.get("link_id") or link.get("invitation_id") or competition)
         rec = ensure(key, competition)
         rec["user_ids"].update(
@@ -1750,7 +1923,7 @@ def _team_records_for(user_id: str):
     # 组队群聊本身也代表一支实际在推进的队伍（例如被邀请加入的其他比赛队伍）
     for group in store.list_groups(user_id):
         members = [x for x in (group.get("members") or []) if pool.get_user(x)]
-        competition = _plain_text(group.get("competition") or "")
+        competition = _competition_display(group.get("competition") or "")
         if len(members) < 2 or not competition:
             continue
         key = "group:%s" % (group.get("group_id") or competition)
@@ -1796,7 +1969,7 @@ def _friend_competition_label(friend_id: str) -> str:
     names = []
     for rec in _team_records_for(current_uid):
         if friend_id in rec.get("user_ids", set()):
-            name = _plain_text(rec.get("competition") or "")
+            name = _competition_display(rec.get("competition") or "")
             if name and name not in names:
                 names.append(name)
     return "、".join(names[:2])
@@ -1806,10 +1979,6 @@ def render_flash_and_dialogs() -> None:
     _get_flash()
     if st.session_state.get("need_avatar_confirm"):
         post_login_avatar_dialog()
-        return
-    pending = store.find_unread_by_kind(current_uid, "min_confirm")
-    if pending:
-        min_confirm_dialog(pending[0].get("notification_id"))
         return
     request = st.session_state.get("dialog_request") or {}
     kind = request.get("kind")
@@ -1827,40 +1996,7 @@ def open_dialog(kind: str, arg=None) -> None:
     st.rerun()
 
 
-@st.dialog("继续匹配确认")
-def min_confirm_dialog(notification_id: str) -> None:
-    note = store.find_notification(current_uid, notification_id) or {}
-    meta = note.get("meta") or {}
-    intent_id = meta.get("intent_id")
-    competition = meta.get("competition") or ""
-    st.markdown(
-        "『%s』比赛最低参赛人数已满，您是否还需要继续匹配更多队友？"
-        % _esc(competition)
-    )
-    c1, c2 = st.columns(2)
-    if c1.button("是，继续匹配", use_container_width=True, type="primary"):
-        keep_matching(intent_id, notification_id)
-    if c2.button("否，不再匹配", use_container_width=True):
-        stop_matching(intent_id, notification_id)
 
-
-def keep_matching(intent_id: str, notification_id: str) -> None:
-    intent = pool.get_intent(intent_id) or {}
-    if intent_id:
-        store.set_min_prompted(intent_id, "keep")
-    store.mark_notification_read(notification_id, current_uid)
-    _set_flash("好的，将继续保留您在参赛池的信息")
-    st.rerun()
-
-
-def stop_matching(intent_id: str, notification_id: str) -> None:
-    intent = pool.get_intent(intent_id) or {}
-    competition = intent.get("competition", "")
-    if intent_id:
-        _remove_intent_from_pool(intent_id, "用户选择不再继续匹配更多队友")
-    store.mark_notification_read(notification_id, current_uid)
-    _set_flash("已将您从『%s』比赛意向中移除（从参赛池移除）" % competition)
-    st.rerun()
 
 
 def _remove_intent_from_pool(intent_id: str, reason: str) -> None:
@@ -1902,38 +2038,26 @@ def evaluate_team_threshold(intent_id: str, user_id: str) -> None:
     if intent is None or intent.get("status") != "matching":
         return
     comp_range = _competition_range_for(intent)
-    low = int(comp_range.get("min", 3))
     high = int(comp_range.get("max", 5))
     effective = _effective_team_size(intent_id, intent)
-    competition = intent.get("competition", "")
+    competition = _competition_display(intent.get("competition", ""))
 
     if effective >= high:
-        _remove_intent_from_pool(
-            intent_id, "已达到比赛最多人数限制，自动从参赛池移除"
-        )
+        intent["status"] = "teamed"
+        intent["team_confirmed"] = True
+        intent["excluded_reason"] = "队伍已满员，已自动移出参赛池"
+        intent["updated_at"] = now_str()
+        pool._save_intents()
+        user = pool.get_user(user_id)
+        if user is not None:
+            user["is_teamed"] = True
+            user["updated_at"] = now_str()
+            pool._save_users()
         store.notify(
             user_id,
-            "您参加的『%s』比赛人数已达 %d 人，满足最多人数限制，"
-            "系统已将您从该比赛参赛池中移除。" % (competition, effective),
+            "队伍已满员（%d/%d），已自动移出参赛池。" % (effective, high),
             "max_reached",
             {"intent_id": intent_id, "competition": competition, "count": effective},
-        )
-        return
-
-    if effective >= low and not store.is_min_prompted(intent_id):
-        store.set_min_prompted(intent_id, "asked")
-        store.notify(
-            user_id,
-            "『%s』比赛最低参赛人数已满，您是否还需要继续匹配更多队友？"
-            % competition,
-            "min_confirm",
-            {
-                "intent_id": intent_id,
-                "competition": competition,
-                "count": effective,
-                "min": low,
-                "max": high,
-            },
         )
 
 
@@ -1995,7 +2119,7 @@ def profile_dialog(user_id: str, intent_id: str = "") -> None:
         % (
             _avatar_html(user, 64),
             _esc(user.get("nickname") or "未命名"),
-            _esc(intent.get("competition") or "暂无参赛意向"),
+            _esc(_competition_display(intent.get("competition")) or "暂无参赛意向"),
         ),
         unsafe_allow_html=True,
     )
@@ -2046,7 +2170,10 @@ def cancel_team_dialog(invitation_id: str) -> None:
     other_intent = pool.get_intent(other_iid) or {}
     st.markdown(
         "确定要解散与『%s』（%s）的组队吗？"
-        % (_esc(other.get("nickname") or "未命名"), _esc(other_intent.get("competition") or ""))
+        % (
+            _esc(other.get("nickname") or "未命名"),
+            _esc(_competition_display(other_intent.get("competition") or "")),
+        )
     )
     c1, c2 = st.columns(2)
     if c1.button("确认解散", use_container_width=True, type="primary"):
@@ -2113,7 +2240,9 @@ def accept_invitation(inv: dict) -> None:
     store.add_friend(from_uid, to_uid)
     store.add_member(from_iid, to_uid)
     store.add_member(to_iid, from_uid)
-    competition = (pool.get_intent(from_iid) or {}).get("competition", "")
+    competition = _competition_display(
+        (pool.get_intent(from_iid) or {}).get("competition", "")
+    )
     store.create_team_link(inv, competition)
     store.notify(
         from_uid,
@@ -2147,8 +2276,8 @@ def send_invitation(host_iid: str, cand_iid: str, message: str = "") -> dict:
     comp_range = _competition_range_for(host_intent)
     effective = _effective_team_size(host_iid, host_intent)
     if effective >= int(comp_range.get("max", 5)):
-        _remove_intent_from_pool(host_iid, "已达到最多人数限制")
-        raise ValueError("该比赛人数已达最多人数限制，已从参赛池移除。")
+        evaluate_team_threshold(host_iid, host_intent.get("user_id"))
+        raise ValueError("队伍已满员，已自动移出参赛池。")
     inv = pool.create_invitation(host_iid, cand_iid)
     message = str(message or "").strip()[:100]
     if message:
@@ -2176,7 +2305,6 @@ def send_invitation(host_iid: str, cand_iid: str, message: str = "") -> dict:
 NAV_TEAM_KINDS = {
     "team_accepted",
     "team_cancelled",
-    "min_confirm",
     "max_reached",
     "admin_invite",
 }
@@ -2328,6 +2456,31 @@ def _tri_index(value) -> int:
 
 def _tri_value(label: str):
     return {"不填": None, "是": True, "否": False}.get(label)
+
+
+def _tri_label(value) -> str:
+    if value is True:
+        return "是"
+    if value is False:
+        return "否"
+    return "不填"
+
+
+def _csv_text(value) -> str:
+    if isinstance(value, (list, tuple, set)):
+        return "、".join(str(x) for x in value if str(x).strip())
+    return str(value or "")
+
+
+def _date_value(value, default: date) -> date:
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            return datetime.strptime(value.strip(), "%Y-%m-%d").date()
+        except ValueError:
+            pass
+    return default
 
 
 def _display_value(key: str, value) -> str:
@@ -2593,30 +2746,131 @@ def render_intent_form() -> None:
     st.markdown("---")
     st.subheader("填写组队需求")
     st.caption("带「必填」的项目需要填写；带「（选填）」的项目不填可直接跳过。")
-    st.caption("表单初始为空，不会自动带出任何已有资料。")
+    st.caption("表单内容会自动保留，切走再回来不会丢失。")
 
-    with st.form("intent_form_%d" % int(st.session_state.get("form_version", 0))):
+    version = int(st.session_state.get("form_version", 0))
+    widget_keys = [
+        "intent_competition",
+        "intent_qq",
+        "intent_wechat",
+        "intent_email",
+        "intent_major",
+        "intent_skills",
+        "intent_wanted_skills",
+        "intent_team_size",
+        "intent_school",
+        "intent_period_start",
+        "intent_period_end",
+        "intent_free_time",
+        "intent_gender",
+        "intent_interests",
+        "intent_role",
+        "intent_has_idea",
+        "intent_offline",
+    ]
+    if st.session_state.get("intent_form_state_version") != version:
+        for key in widget_keys:
+            st.session_state.pop(key, None)
+        st.session_state.intent_form_state_version = version
+        st.session_state.intent_form_draft = {}
+
+    draft = st.session_state.get("intent_form_draft") or {}
+    period_draft = draft.get("available_period") or collected.get("available_period") or {}
+
+    defaults = {
+        "competition": draft.get("competition", form_competition),
+        "qq": draft.get("qq", collected.get("qq", "")),
+        "wechat": draft.get("wechat", collected.get("wechat", "")),
+        "email": draft.get("email", collected.get("email", "")),
+        "major": draft.get("major", collected.get("major", "")),
+        "skills": draft.get("skills", _csv_text(collected.get("skills"))),
+        "wanted_skills": draft.get(
+            "wanted_skills", _csv_text(collected.get("wanted_skills"))
+        ),
+        "team_size": draft.get("team_size", collected.get("team_size", 1)),
+        "school": draft.get("school", collected.get("school", "")),
+        "free_time": draft.get("free_time", _csv_text(collected.get("free_time"))),
+        "gender_preference": draft.get(
+            "gender_preference", collected.get("gender_preference", "")
+        ),
+        "interests": draft.get("interests", _csv_text(collected.get("interests"))),
+        "preferred_role": draft.get(
+            "preferred_role", collected.get("preferred_role", "")
+        ),
+        "has_idea": draft.get("has_idea", collected.get("has_idea")),
+        "willing_offline": draft.get(
+            "willing_offline", collected.get("willing_offline")
+        ),
+    }
+
+    def ensure_widget(key: str, default) -> None:
+        if key not in st.session_state:
+            st.session_state[key] = default
+
+    ensure_widget("intent_competition", str(defaults["competition"] or ""))
+    ensure_widget("intent_qq", str(defaults["qq"] or ""))
+    ensure_widget("intent_wechat", str(defaults["wechat"] or ""))
+    ensure_widget("intent_email", str(defaults["email"] or ""))
+    ensure_widget("intent_major", str(defaults["major"] or ""))
+    ensure_widget("intent_skills", str(defaults["skills"] or ""))
+    ensure_widget("intent_wanted_skills", str(defaults["wanted_skills"] or ""))
+    try:
+        team_size_default = int(defaults["team_size"] or 1)
+    except (TypeError, ValueError):
+        team_size_default = 1
+    ensure_widget("intent_team_size", max(1, min(20, team_size_default)))
+    ensure_widget("intent_school", str(defaults["school"] or ""))
+    ensure_widget(
+        "intent_period_start",
+        _date_value(
+            draft.get("period_start") or period_draft.get("start_date"),
+            date.today(),
+        ),
+    )
+    ensure_widget(
+        "intent_period_end",
+        _date_value(
+            draft.get("period_end") or period_draft.get("end_date"),
+            llm_api.default_period_end(),
+        ),
+    )
+    ensure_widget("intent_free_time", str(defaults["free_time"] or ""))
+    ensure_widget("intent_gender", str(defaults["gender_preference"] or ""))
+    ensure_widget("intent_interests", str(defaults["interests"] or ""))
+    ensure_widget("intent_role", str(defaults["preferred_role"] or ""))
+    ensure_widget("intent_has_idea", _tri_label(defaults["has_idea"]))
+    ensure_widget("intent_offline", _tri_label(defaults["willing_offline"]))
+
+    with st.container():
         st.markdown("##### 必填项")
         competition = st.text_input(
             "比赛名称（必填）",
-            value=str(form_competition or ""),
+            key="intent_competition",
             placeholder="例如：大创赛",
         )
         st.markdown("**联系方式（必填，QQ / 微信 / 邮箱至少填写一项）**")
         cq, cw, ce = st.columns(3)
         with cq:
-            qq = st.text_input("QQ", placeholder="例如：123456789")
+            qq = st.text_input("QQ", key="intent_qq", placeholder="例如：123456789")
         with cw:
-            wechat = st.text_input("微信", placeholder="例如：xiaolin_2026")
+            wechat = st.text_input(
+                "微信", key="intent_wechat", placeholder="例如：xiaolin_2026"
+            )
         with ce:
-            email = st.text_input("邮箱", placeholder="例如：name@example.com")
-        major = st.text_input("专业（必填）", placeholder="例如：数据科学与大数据技术")
+            email = st.text_input(
+                "邮箱", key="intent_email", placeholder="例如：name@example.com"
+            )
+        major = st.text_input(
+            "专业（必填）", key="intent_major", placeholder="例如：数据科学与大数据技术"
+        )
         skills = st.text_input(
             "掌握技术（必填）",
+            key="intent_skills",
             placeholder="Python、算法、数据分析",
         )
         wanted_skills = st.text_input(
             "希望队友擅长（必填）",
+            key="intent_wanted_skills",
             placeholder="例如：文档写作、PPT、UI设计",
         )
         c1, c2 = st.columns([1, 2])
@@ -2625,23 +2879,21 @@ def render_intent_form() -> None:
                 "已有几人（必填）",
                 min_value=1,
                 max_value=20,
-                value=1,
                 step=1,
+                key="intent_team_size",
             )
         with c2:
-            school = st.text_input("学校（必填）", placeholder="例如：湖南第一师范学院")
+            school = st.text_input(
+                "学校（必填）",
+                key="intent_school",
+                placeholder="例如：湖南第一师范学院",
+            )
         st.markdown("**可组队时间段（必填）**")
         pc1, pc2 = st.columns(2)
         with pc1:
-            period_start = st.date_input(
-                "开始日期",
-                value=date.today(),
-            )
+            period_start = st.date_input("开始日期", key="intent_period_start")
         with pc2:
-            period_end = st.date_input(
-                "结束日期",
-                value=llm_api.default_period_end(),
-            )
+            period_end = st.date_input("结束日期", key="intent_period_end")
         period_input = ""
         if period_start and period_end:
             period_input = "%s 到 %s" % (
@@ -2651,30 +2903,59 @@ def render_intent_form() -> None:
 
         st.markdown("##### 选填项（不填可直接跳过）")
         free_time = st.text_input(
-            "空闲时间（选填）", placeholder="例如：周三晚上、周末"
+            "空闲时间（选填）", key="intent_free_time", placeholder="例如：周三晚上、周末"
         )
         gender_preference = st.text_input(
-            "性别偏好（选填）", placeholder="例如：不限 / 男 / 女"
+            "性别偏好（选填）", key="intent_gender", placeholder="例如：不限 / 男 / 女"
         )
         interests = st.text_input(
-            "兴趣方向（选填）", placeholder="例如：人工智能、产品设计、写作"
+            "兴趣方向（选填）", key="intent_interests", placeholder="例如：人工智能、产品设计、写作"
         )
         preferred_role = st.text_input(
-            "希望担任角色（选填）", placeholder="例如：算法与数据分析 / 文档与汇报"
+            "希望担任角色（选填）", key="intent_role", placeholder="例如：算法与数据分析 / 文档与汇报"
         )
         c3, c4 = st.columns(2)
         with c3:
             has_idea_label = st.selectbox(
-                "是否已有项目创意（选填）", ["不填", "是", "否"], index=0
+                "是否已有项目创意（选填）",
+                ["不填", "是", "否"],
+                key="intent_has_idea",
             )
         with c4:
             offline_label = st.selectbox(
-                "是否愿意线下见面（选填）", ["不填", "是", "否"], index=0
+                "是否愿意线下见面（选填）",
+                ["不填", "是", "否"],
+                key="intent_offline",
             )
 
-        submitted = st.form_submit_button(
+        submitted = st.button(
             "提交并生成确认信息", use_container_width=True, type="primary"
         )
+
+    st.session_state.intent_form_draft = {
+        "competition": str(competition or ""),
+        "qq": str(qq or ""),
+        "wechat": str(wechat or ""),
+        "email": str(email or ""),
+        "major": str(major or ""),
+        "skills": str(skills or ""),
+        "wanted_skills": str(wanted_skills or ""),
+        "team_size": int(team_size_input),
+        "school": str(school or ""),
+        "free_time": str(free_time or ""),
+        "gender_preference": str(gender_preference or ""),
+        "interests": str(interests or ""),
+        "preferred_role": str(preferred_role or ""),
+        "has_idea": _tri_value(has_idea_label),
+        "willing_offline": _tri_value(offline_label),
+        "period_start": period_start.isoformat() if period_start else "",
+        "period_end": period_end.isoformat() if period_end else "",
+        "available_period": {
+            "raw": period_input,
+            "start_date": period_start.isoformat() if period_start else "",
+            "end_date": period_end.isoformat() if period_end else "",
+        },
+    }
 
     if not submitted:
         return
@@ -2755,6 +3036,26 @@ def render_confirmation() -> None:
         st.rerun()
     if c2.button("返回修改", use_container_width=True):
         st.session_state.collected = dict(data)
+        for key in (
+            "intent_competition",
+            "intent_qq",
+            "intent_wechat",
+            "intent_email",
+            "intent_major",
+            "intent_skills",
+            "intent_wanted_skills",
+            "intent_team_size",
+            "intent_school",
+            "intent_period_start",
+            "intent_period_end",
+            "intent_free_time",
+            "intent_gender",
+            "intent_interests",
+            "intent_role",
+            "intent_has_idea",
+            "intent_offline",
+        ):
+            st.session_state.pop(key, None)
         st.session_state.stage = "form"
         st.rerun()
 
@@ -2786,7 +3087,10 @@ def finalize_matching() -> None:
         st.session_state.stage = "form"
         return
 
-    competition = str(collected.get("competition", "")).strip()
+    competition = matcher.normalize_competition_name(
+        str(collected.get("competition", "")).strip(), table
+    )
+    collected["competition"] = competition
     comp_range = matcher.get_competition_range(competition, table)
     contact = str(collected.get("contact", "")).strip()
     user_data = {
@@ -3107,7 +3411,7 @@ def render_history_detail() -> None:
     header_left, header_right = st.columns([4, 1])
     with header_left:
         st.markdown(
-            "### 匹配记录 · %s" % _plain_text(intent.get("competition") or ""),
+            "### 匹配记录 · %s" % _competition_display(intent.get("competition") or ""),
             unsafe_allow_html=True,
         )
         st.caption(
@@ -3181,7 +3485,7 @@ def render_history_section() -> None:
         with c1:
             st.markdown(
                 "<div class='history-title'>%s</div>"
-                % _esc(_plain_text(intent.get("competition") or "")),
+                % _esc(_competition_display(intent.get("competition") or "")),
                 unsafe_allow_html=True,
             )
             st.caption(
@@ -3286,7 +3590,7 @@ def _intent_brief(intent_id: str) -> str:
     intent = pool.get_intent(intent_id) or {}
     user = pool.get_user(intent.get("user_id", "")) or {}
     return "「%s」· %s · 已有 %s 人 · 擅长 %s" % (
-        _plain_text(intent.get("competition", "")),
+        _competition_display(intent.get("competition", "")),
         user.get("nickname", ""),
         intent.get("team_size", ""),
         "、".join(intent.get("skills", [])[:4]),
@@ -3526,7 +3830,10 @@ def render_groups_tab() -> None:
             for g in groups:
                 gid = g.get("group_id", "")
                 unread = _group_unread_count(current_uid, gid)
-                label = "%s · %s" % (g.get("name"), g.get("competition"))
+                label = "%s · %s" % (
+                    g.get("name"),
+                    _competition_display(g.get("competition")),
+                )
                 if st.button(
                     label + ("  🔴%d" % unread if unread else ""),
                     key="group_open_%s" % gid,
@@ -3544,7 +3851,7 @@ def render_groups_tab() -> None:
         st.caption(
             "比赛：%s · 成员：%s"
             % (
-                _esc(_plain_text(group.get("competition") or "")),
+                _esc(_competition_display(group.get("competition") or "")),
                 "、".join(_user_name(uid) for uid in (group.get("members") or [])),
             )
         )
@@ -3650,22 +3957,6 @@ def render_notifications_block() -> None:
                             "admin_rejected",
                         )
                     st.rerun()
-            elif kind == "min_confirm" and not note.get("read"):
-                meta = note.get("meta") or {}
-                c1, c2 = st.columns(2)
-                if c1.button(
-                    "是，继续匹配",
-                    key="min_yes_%s" % note.get("notification_id"),
-                    use_container_width=True,
-                    type="primary",
-                ):
-                    keep_matching(meta.get("intent_id"), note.get("notification_id"))
-                if c2.button(
-                    "否，从参赛池移除",
-                    key="min_no_%s" % note.get("notification_id"),
-                    use_container_width=True,
-                ):
-                    stop_matching(meta.get("intent_id"), note.get("notification_id"))
             elif not note.get("read"):
                 store.mark_notification_read(note.get("notification_id"), current_uid)
 
@@ -3756,7 +4047,7 @@ def render_notices_tab() -> None:
             st.caption("我的留言：" + str(inv.get("message")))
 
     generic_unread = any(
-        not note.get("read") and note.get("kind") not in ("admin_invite", "min_confirm")
+        not note.get("read") and note.get("kind") not in ("admin_invite",)
         for note in store.list_notifications(current_uid)
     )
     unseen_pending = any(
@@ -3764,46 +4055,6 @@ def render_notices_tab() -> None:
         for inv in pending_recv
     )
     render_notifications_block()
-
-    st.markdown("### 组队提醒")
-    if st.button("立即检查组队提醒", use_container_width=False):
-        st.session_state.last_reminders = pool.generate_team_reminders(24)
-        st.rerun()
-    reminded = st.session_state.get("last_reminders")
-    if reminded is not None:
-        if reminded:
-            st.success(
-                "本次提醒了 %d 条意向：%s"
-                % (
-                    len(reminded),
-                    "、".join(
-                        "%s（%s）" % (x.get("nickname", ""), x.get("competition", ""))
-                        for x in reminded
-                    ),
-                )
-            )
-        else:
-            st.info("本次没有需要提醒的意向（可能都在 24 小时内提醒过）。")
-
-    pending = [
-        intent
-        for intent in pool.list_user_intents(current_uid)
-        if pool.needs_team_response(intent)
-    ]
-    if pending:
-        st.warning("请确认您是否已组队？是否已和对方沟通好？")
-        for intent in pending:
-            iid = intent.get("intent_id")
-            st.markdown(
-                "**%s** —— 请选择：" % _plain_text(intent.get("competition", ""))
-            )
-            c1, c2 = st.columns(2)
-            if c1.button("已组队", key="remind_yes_%s" % iid, use_container_width=True):
-                pool.respond_team_reminder(iid, True)
-                st.rerun()
-            if c2.button("未组队", key="remind_no_%s" % iid, use_container_width=True):
-                pool.respond_team_reminder(iid, False)
-                st.rerun()
 
     store.mark_invitations_seen(
         current_uid, [inv.get("invitation_id") for inv in pending_recv]
@@ -3818,12 +4069,12 @@ def render_notices_tab() -> None:
 def _intent_partner_ids(intent_id: str):
     """某条意向真实组到的队友（只统计与该意向同比赛的已组队关系）。"""
     intent = pool.get_intent(intent_id) or {}
-    competition = _plain_text(intent.get("competition") or "")
+    competition = _competition_display(intent.get("competition") or "")
     partners = set()
 
     def host_competition(inv):
         host_intent = pool.get_intent(inv.get("from_intent") or "") or {}
-        return _plain_text(host_intent.get("competition") or "")
+        return _competition_display(host_intent.get("competition") or "")
 
     for inv in _accepted_invitations(current_uid):
         if intent_id not in (inv.get("from_intent"), inv.get("to_intent")):
@@ -3840,7 +4091,7 @@ def _intent_partner_ids(intent_id: str):
     for link in store.list_team_links(current_uid):
         if intent_id not in (link.get("intent_a"), link.get("intent_b")):
             continue
-        if _plain_text(link.get("competition") or "") != competition:
+        if _competition_display(link.get("competition") or "") != competition:
             continue
         other = (
             link.get("user_b")
@@ -3868,7 +4119,7 @@ def render_team_tab() -> None:
         with st.container(border=True):
             st.markdown(
                 "**%s** · 已组队 %d 人"
-                % (_plain_text(rec.get("competition") or ""), len(members))
+                % (_competition_display(rec.get("competition") or ""), len(members))
             )
             member_labels = []
             for uid in members:
@@ -3947,11 +4198,16 @@ def _add_competition_to_table(name: str, low: int, high: int) -> bool:
 
 
 def render_admin_tab() -> None:
-    if not current_is_admin:
+    pool_ok = pool.reload()
+    store.reload()
+    if not pool_ok:
+        st.warning("云端用户读取失败，当前展示缓存数据；已停止写入，避免覆盖 Neon 数据。")
+    if not _is_admin(current_uid):
         st.error("只有管理员可以进入管理中心。")
         return
 
-    viewer_is_super = _is_super_admin(current_user)
+    viewer_user = pool.get_user(current_uid) or current_user
+    viewer_is_super = _is_super_admin(viewer_user)
     st.subheader("管理中心")
     if viewer_is_super:
         _render_page_summary("以好友列表式展示所有注册用户；可查看完整资料、分配/收回管理员、注销普通用户。")
