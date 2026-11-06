@@ -1093,6 +1093,43 @@ pool = get_pool()
 table = get_table()
 store = get_store()
 
+
+def _reload_store() -> bool:
+    """兼容旧缓存对象：没有 reload() 时直接重新实例化 SocialStore。"""
+    global store
+    reload_fn = getattr(store, "reload", None)
+    if callable(reload_fn):
+        try:
+            return bool(reload_fn())
+        except Exception:
+            return False
+    try:
+        fresh = SocialStore(BASE_DIR)
+        store = fresh
+        st.session_state.store = fresh
+        return True
+    except Exception:
+        return False
+
+
+def _reload_pool() -> bool:
+    """兼容旧缓存对象：没有 reload() 时直接重新实例化 DataPool。"""
+    global pool
+    reload_fn = getattr(pool, "reload", None)
+    if callable(reload_fn):
+        try:
+            return bool(reload_fn())
+        except Exception:
+            return False
+    try:
+        fresh = DataPool(BASE_DIR)
+        pool = fresh
+        st.session_state.pool = fresh
+        return True
+    except Exception:
+        return False
+
+
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "current_user_id" not in st.session_state:
@@ -1414,7 +1451,7 @@ def _user_is_deleted(user_id: str) -> bool:
 
 
 def render_admin_invite_banner() -> None:
-    if not store.reload():
+    if not _reload_store():
         return
     inviter_uid = store.get_admin_inviter(current_uid)
     if not inviter_uid:
@@ -4198,8 +4235,8 @@ def _add_competition_to_table(name: str, low: int, high: int) -> bool:
 
 
 def render_admin_tab() -> None:
-    pool_ok = pool.reload()
-    store.reload()
+    pool_ok = _reload_pool()
+    _reload_store()
     if not pool_ok:
         st.warning("云端用户读取失败，当前展示缓存数据；已停止写入，避免覆盖 Neon 数据。")
     if not _is_admin(current_uid):
