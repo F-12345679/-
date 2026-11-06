@@ -1140,6 +1140,26 @@ def _reload_pool() -> bool:
     return ok
 
 
+def _invalidate_neon_cache(key: str = "") -> None:
+    """兼容旧版 neon_store：没有 invalidate_cache() 时直接操作缓存字典。"""
+    fn = getattr(neon_store, "invalidate_cache", None)
+    if callable(fn):
+        try:
+            fn(key)
+            return
+        except Exception:
+            pass
+    cache = getattr(neon_store, "_CACHE", None)
+    if isinstance(cache, dict):
+        try:
+            if key:
+                cache.pop(key, None)
+            else:
+                cache.clear()
+        except Exception:
+            pass
+
+
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "current_user_id" not in st.session_state:
@@ -4437,11 +4457,11 @@ def _add_competition_to_table(name: str, low: int, high: int) -> bool:
 def render_admin_tab() -> None:
     pool_ok = _reload_pool()
     if len(pool.users) <= 1:
-        neon_store.invalidate_cache("users")
+        _invalidate_neon_cache("users")
         pool_ok = _reload_pool() or pool_ok
     _reload_store()
     if not (store.data.get("admins") or []):
-        neon_store.invalidate_cache("app_extra")
+        _invalidate_neon_cache("app_extra")
         _reload_store()
     if not pool_ok:
         st.warning("云端用户读取失败，当前展示缓存数据；已停止写入，避免覆盖 Neon 数据。")
