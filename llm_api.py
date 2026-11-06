@@ -27,8 +27,8 @@ from data_pool import dedupe_list, parse_date, to_bool, to_int
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_PATH = os.path.join(BASE_DIR, ".env")
 
-BASE_URL = "https://api.deepseek.com"
-MODEL = "deepseek-chat"
+BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+MODEL = "deepseek-v3"
 
 # 进页面第一句（写死）
 OPENING_MESSAGE = (
