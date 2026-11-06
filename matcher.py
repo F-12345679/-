@@ -649,6 +649,98 @@ def _intent_innovation(intent: Dict[str, Any], table: Dict[str, Any]) -> bool:
     return judge_innovation_local(intent.get("competition", ""), table) != "no"
 
 
+def constraint_checks(
+    host_intent: Dict[str, Any],
+    host_user: Dict[str, Any],
+    cand_intent: Dict[str, Any],
+    cand_user: Dict[str, Any],
+    table: Dict[str, Any],
+    comp_range: Dict[str, Any],
+    today: Optional[date] = None,
+) -> List[Dict[str, Any]]:
+    """逐条检查硬约束，返回可展示给用户的检查结果。"""
+    today = today or date.today()
+    checks: List[Dict[str, Any]] = []
+
+    def add(name: str, passed: bool, detail: str = "") -> None:
+        checks.append(
+            {"name": name, "passed": bool(passed), "detail": str(detail or "")}
+        )
+
+    add(
+        "不能匹配自己",
+        cand_intent.get("intent_id") != host_intent.get("intent_id"),
+        "当前意向：%s" % host_intent.get("intent_id", ""),
+    )
+    add(
+        "不能匹配同一用户",
+        cand_intent.get("user_id") != host_intent.get("user_id"),
+        "当前用户：%s" % (host_user.get("nickname") or host_intent.get("user_id", "")),
+    )
+    status = cand_intent.get("status")
+    add("对方状态必须是 matching", status == "matching", "当前状态：%s" % status)
+
+    period = cand_intent.get("available_period") or {}
+    end = parse_date(period.get("end_date")) if isinstance(period, dict) else None
+    expired = end is not None and end < today
+    add(
+        "对方意向未过期",
+        not expired,
+        "截止日期：%s" % (end.isoformat() if end else "未填写"),
+    )
+
+    host_innov = _intent_innovation(host_intent, table)
+    cand_innov = _intent_innovation(cand_intent, table)
+    add(
+        "双方都是创新类比赛",
+        host_innov and cand_innov,
+        "我方：%s；对方：%s" % ("是" if host_innov else "否", "是" if cand_innov else "否"),
+    )
+
+    host_comp = normalize_competition_name(host_intent.get("competition", ""), table)
+    cand_comp = normalize_competition_name(cand_intent.get("competition", ""), table)
+    add(
+        "比赛名称归一化后一致",
+        bool(host_comp) and bool(cand_comp) and host_comp == cand_comp,
+        "我方：%s；对方：%s"
+        % (host_comp or "未填写", cand_comp or "未填写"),
+    )
+
+    add(
+        "可组队时间段有交集",
+        periods_overlap(
+            host_intent.get("available_period"), cand_intent.get("available_period")
+        ),
+        "我方：%s；对方：%s"
+        % (
+            _period_parts(host_intent.get("available_period"))[2] or "未填写",
+            _period_parts(cand_intent.get("available_period"))[2] or "未填写",
+        ),
+    )
+
+    host_size = to_int(host_intent.get("team_size")) or 1
+    cand_size = to_int(cand_intent.get("team_size")) or 1
+    combined = host_size + cand_size
+    low = int(comp_range.get("min", 3))
+    high = int(comp_range.get("max", 5))
+    add(
+        "合并人数不超过上限",
+        combined <= high,
+        "合并后 %d 人，上限 %d 人" % (combined, high),
+    )
+    add(
+        "最低人数提示",
+        True,
+        "合并后 %d 人，最低 %d 人%s"
+        % (
+            combined,
+            low,
+            "；暂未达到最低人数，可先组队后继续招募" if combined < low else "",
+        ),
+    )
+    return checks
+
+
 def hard_constraints(
     host_intent: Dict[str, Any],
     host_user: Dict[str, Any],
@@ -658,50 +750,16 @@ def hard_constraints(
     comp_range: Dict[str, Any],
     today: Optional[date] = None,
 ) -> Tuple[bool, List[str]]:
-    """
-    硬约束检查，返回 (是否通过, 不通过原因列表)。
-    任意一项不满足直接淘汰。
-    """
-    reasons: List[str] = []
-    today = today or date.today()
-
-    if cand_intent.get("intent_id") == host_intent.get("intent_id"):
-        reasons.append("不能匹配自己")
-    if cand_intent.get("user_id") == host_intent.get("user_id"):
-        reasons.append("不能匹配同一用户")
-    if cand_intent.get("status") != "matching":
-        reasons.append("对方意向不在匹配中")
-    if cand_intent.get("status") == "expired":
-        reasons.append("对方意向已过期")
-    period = cand_intent.get("available_period") or {}
-    end = parse_date(period.get("end_date")) if isinstance(period, dict) else None
-    if end is not None and end < today:
-        reasons.append("对方意向已超过可组队时间段")
-
-    if not _intent_innovation(host_intent, table):
-        reasons.append("我方比赛不是创新类")
-    if not _intent_innovation(cand_intent, table):
-        reasons.append("对方比赛不是创新类")
-
-    host_comp = normalize_competition_name(host_intent.get("competition", ""), table)
-    cand_comp = normalize_competition_name(cand_intent.get("competition", ""), table)
-    if not host_comp or not cand_comp or host_comp != cand_comp:
-        reasons.append("比赛名称不一致")
-
-    if not periods_overlap(
-        host_intent.get("available_period"), cand_intent.get("available_period")
-    ):
-        reasons.append("可组队时间段没有交集")
-
-    host_size = to_int(host_intent.get("team_size")) or 1
-    cand_size = to_int(cand_intent.get("team_size")) or 1
-    combined = host_size + cand_size
-    low = int(comp_range.get("min", 3))
-    high = int(comp_range.get("max", 5))
-    if not (low <= combined <= high):
-        reasons.append("合并人数 %d 不在 %d-%d 区间" % (combined, low, high))
-
-    return (len(reasons) == 0, reasons)
+    """硬约束检查，返回 (是否通过, 不通过原因列表)。"""
+    checks = constraint_checks(
+        host_intent, host_user, cand_intent, cand_user, table, comp_range, today
+    )
+    reasons = [
+        "%s%s" % (c["name"], ("：" + c["detail"]) if c.get("detail") else "")
+        for c in checks
+        if not c["passed"]
+    ]
+    return (not reasons, reasons)
 
 
 def _candidate_item(
@@ -797,15 +855,45 @@ def find_candidates(
         index_hits |= inverted_index.get(_norm_token(skill), set())
 
     results: List[Dict[str, Any]] = []
+    diagnostics: List[Dict[str, Any]] = []
     hard_pass = 0
     for cand_intent in candidate_intents:
+        if (
+            cand_intent.get("intent_id") == host_intent.get("intent_id")
+            or cand_intent.get("user_id") == host_intent.get("user_id")
+        ):
+            continue
         cand_user = users.get(cand_intent.get("user_id", ""))
         if cand_user is None:
+            diagnostics.append(
+                {
+                    "intent_id": cand_intent.get("intent_id"),
+                    "user_id": cand_intent.get("user_id"),
+                    "nickname": "未知用户",
+                    "competition": cand_intent.get("competition", ""),
+                    "checks": [
+                        {
+                            "name": "对方用户资料存在",
+                            "passed": False,
+                            "detail": "用户表中找不到该用户",
+                        }
+                    ],
+                }
+            )
             continue
-        ok, _reasons = hard_constraints(
+        checks = constraint_checks(
             host_intent, host_user, cand_intent, cand_user, table, comp_range, today
         )
-        if not ok:
+        if any(not c["passed"] for c in checks):
+            diagnostics.append(
+                {
+                    "intent_id": cand_intent.get("intent_id"),
+                    "user_id": cand_intent.get("user_id"),
+                    "nickname": cand_user.get("nickname", ""),
+                    "competition": cand_intent.get("competition", ""),
+                    "checks": checks,
+                }
+            )
             continue
         hard_pass += 1
         score_data = score_pair(host_intent, host_user, cand_intent, cand_user)
@@ -836,9 +924,18 @@ def find_candidates(
     recommended = [x for x in results if float(x["score"]) > 0]
     alternatives = [x for x in results if float(x["score"]) <= 0]
 
+    best_diagnostics: Dict[str, Tuple[int, Dict[str, Any]]] = {}
+    for diag in diagnostics:
+        uid = str(diag.get("user_id") or "")
+        failed = sum(1 for c in diag.get("checks", []) if not c.get("passed"))
+        if uid not in best_diagnostics or failed < best_diagnostics[uid][0]:
+            best_diagnostics[uid] = (failed, diag)
+    diagnostics = [item[1] for item in best_diagnostics.values()]
+
     return {
         "recommended": recommended,
         "alternatives": alternatives,
+        "diagnostics": diagnostics,
         "needed": needed,
         "range": comp_range,
         "host_team_size": host_size,

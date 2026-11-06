@@ -3324,6 +3324,27 @@ def finalize_matching() -> None:
     append_chat("assistant", summary)
 
 
+def _candidate_reason(item: dict) -> str:
+    def text(value) -> str:
+        if isinstance(value, (list, tuple, set)):
+            joined = "、".join(str(x) for x in value if str(x).strip())
+            return joined or "未填写"
+        return str(value or "").strip() or "未填写"
+
+    fields = [
+        ("技能", item.get("skills")),
+        ("希望队友擅长", item.get("wanted_skills")),
+        ("学校", item.get("school")),
+        ("专业", item.get("major")),
+        ("空闲时间", item.get("free_time")),
+        ("兴趣", item.get("interests")),
+        ("希望担任角色", item.get("preferred_role")),
+    ]
+    return "匹配依据（均来自对方真实填写）：" + "；".join(
+        "%s：%s" % (label, text(value)) for label, value in fields
+    )
+
+
 def render_candidate(item: dict, host_intent_id: str, group: str) -> None:
     cand_user = pool.get_user(item.get("user_id", "")) or {}
     with st.container(border=True):
@@ -3342,6 +3363,7 @@ def render_candidate(item: dict, host_intent_id: str, group: str) -> None:
         with right:
             st.metric("匹配度", "%.1f%%" % float(item.get("score", 0)))
         st.progress(min(100, int(round(float(item.get("score", 0))))))
+        st.caption(_candidate_reason(item))
 
         contact = _user_contact(cand_user) or item.get("contact") or "未提供"
         st.markdown(
@@ -3442,6 +3464,29 @@ def render_match_results() -> None:
         "推荐列表 = 匹配分 > 0，备选列表 = 满足硬约束但匹配分 = 0。"
         % (result.get("candidates_checked", 0), result.get("index_hits", 0))
     )
+
+    diagnostics = result.get("diagnostics", [])
+    with st.expander("为什么没匹配到（逐条硬约束）"):
+        if not diagnostics:
+            st.caption("本次所有候选人都通过了硬约束。")
+        else:
+            for diag in diagnostics[:30]:
+                st.markdown(
+                    "**%s** · %s"
+                    % (
+                        _esc(diag.get("nickname") or "未命名"),
+                        _esc(
+                            _competition_display(diag.get("competition") or "")
+                            or "未填写"
+                        ),
+                    )
+                )
+                for check in diag.get("checks", []):
+                    mark = "✅" if check.get("passed") else "❌"
+                    line = "%s %s" % (mark, check.get("name", ""))
+                    if check.get("detail"):
+                        line += "：" + str(check.get("detail"))
+                    st.write(line)
 
     host_intent_id = st.session_state.get("host_intent_id")
     recommended = _dedupe_items_by_user(result.get("recommended", []))
@@ -3612,6 +3657,13 @@ def render_history_detail() -> None:
                     "nickname": cand_user.get("nickname") or rec.get("nickname") or "未命名",
                     "score": rec.get("score", 0),
                     "competition": cand_intent.get("competition") or rec.get("competition", ""),
+                    "skills": list(cand_intent.get("skills", [])),
+                    "wanted_skills": list(cand_intent.get("wanted_skills", [])),
+                    "school": cand_user.get("school", ""),
+                    "major": cand_user.get("major", ""),
+                    "free_time": list(cand_user.get("free_time", [])),
+                    "interests": list(cand_user.get("interests", [])),
+                    "preferred_role": cand_intent.get("preferred_role", ""),
                     "intro": "该意向当前不在匹配池中",
                 }
             render_candidate(item, intent_id, "hist_%s" % cand_iid)
@@ -3676,6 +3728,12 @@ def render_history_section() -> None:
                     _pending_invite_count(iid),
                     len(_intent_partner_ids(iid)),
                 )
+            )
+            snapshot = store.get_snapshot(iid) or {}
+            record_count = len(snapshot.get("candidates", []) or [])
+            st.caption(
+                "历史匹配记录：%d 位 · 当前可匹配：%d 位"
+                % (record_count, len(new_items))
             )
             seen_count = store.history_seen_count(current_uid, iid)
             unseen = max(0, len(new_items) - seen_count)
