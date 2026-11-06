@@ -8,9 +8,11 @@ neon_store.py — 云端 JSON 存储桥接（Neon Postgres）
 一张表 json_store(_id text PRIMARY KEY, data jsonb)，_id 即文件名（users/intents/invitations/messages/app_extra）。
 """
 
+import copy
 import json
 import os
 import sys
+import time
 
 try:
     import psycopg2
@@ -64,6 +66,8 @@ except Exception:
 
 _DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("NEON_DATABASE_URL")
 _conn = None
+_CACHE: dict = {}
+_CACHE_TTL = 30.0
 
 
 def is_configured() -> bool:
@@ -87,10 +91,21 @@ def _ensure_table() -> None:
         conn.commit()
 
 
+def invalidate_cache(key: str = "") -> None:
+    if key:
+        _CACHE.pop(key, None)
+    else:
+        _CACHE.clear()
+
+
 def load_json_checked(key: str, default):
-    """读取 JSON，返回 (是否读取成功, 数据)。缺少 key 视为成功并返回 default。"""
+    """读取 JSON，返回 (是否读取成功, 数据)。30 秒内复用缓存。"""
     if not is_configured():
         return True, default
+    now = time.time()
+    cached = _CACHE.get(key)
+    if cached is not None and now - cached[0] <= _CACHE_TTL:
+        return True, copy.deepcopy(cached[1])
     try:
         _ensure_table()
         with _get_conn() as conn:
@@ -98,9 +113,12 @@ def load_json_checked(key: str, default):
                 cur.execute("SELECT data FROM json_store WHERE _id = %s", (key,))
                 row = cur.fetchone()
         if row is None or row[0] is None:
-            return True, default
-        return True, row[0]
+            _CACHE[key] = (now, copy.deepcopy(default))
+            return True, copy.deepcopy(default)
+        _CACHE[key] = (now, copy.deepcopy(row[0]))
+        return True, copy.deepcopy(row[0])
     except Exception as exc:
+        _CACHE.pop(key, None)
         print("[neon_store] 读取失败 %s: %s" % (key, exc), file=sys.stderr)
         return False, default
 
@@ -126,6 +144,7 @@ def save_json(key: str, data) -> bool:
                         (key, PgJson(data)),
                     )
                 conn.commit()
+            _CACHE.pop(key, None)
             return True
         except Exception as exc:
             print(

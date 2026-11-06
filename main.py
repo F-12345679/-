@@ -169,11 +169,21 @@ def _plain_text(value) -> str:
     return text
 
 
+def _normalize_competition_name(value) -> str:
+    fn = getattr(matcher, "normalize_competition_name", None)
+    if callable(fn):
+        try:
+            return fn(value, table)
+        except Exception:
+            pass
+    return _plain_text(value)
+
+
 def _competition_display(value) -> str:
     text = _plain_text(value)
     if not text:
         return ""
-    return matcher.normalize_competition_name(text, table)
+    return _normalize_competition_name(text)
 
 
 def _period_display(period) -> str:
@@ -188,106 +198,95 @@ def _period_display(period) -> str:
     return raw or (("截止 " + end) if end else "未填写")
 
 
-def _render_bg_music(height: int = 46, on_light: bool = False) -> None:
-    """背景音乐：音频挂在父页面，页面重跑也不会重置；按钮可真正暂停/继续。"""
+def _render_bg_music(height: int = 1, on_light: bool = False) -> None:
+    """背景音乐：按钮和音频都直接注入父页面，点击可真正暂停/继续。"""
     uri = _asset_data_uri(os.path.join(BASE_DIR, "assets", "bg_music.mp3"), "audio/mpeg")
     if not uri:
         return
     template = """
     <style>
-      html, body { margin: 0; padding: 0; background: transparent; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
-      .wrap { display: flex; align-items: center; gap: 10px; }
-      button {
-        border: 1px solid #a7f3d0; border-radius: 999px; padding: 8px 18px;
-        background: rgba(224, 250, 236, 0.95); color: #0b7a51; font-size: 13px; font-weight: 800; cursor: pointer;
-        box-shadow: 0 6px 16px rgba(6,80,52,.16);
-      }
-      button:hover { background: #d8f7e4; }
-      button:active { transform: translateY(1px); }
-      .st { font-size: 11.5px; color: rgba(255,255,255,.9); }
-      body.on-light .st { color: #4f7a64; }
+      html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
     </style>
-    <div class="wrap"><button id="toggle" type="button">暂停音乐</button><span class="st" id="state"></span></div>
     <script>
     (function () {
-      if (__ONLIGHT__) document.body.className = 'on-light';
-      var parentWin = window.parent;
-      var parentDoc = null;
-      try { parentDoc = parentWin.document; } catch (e) {}
+      var p = window.parent, d = null;
+      try { d = p.document; } catch (e) { return; }
       var storage = null;
-      try { storage = parentWin.localStorage; } catch (e) { try { storage = localStorage; } catch (e2) {} }
-      var audio = null;
+      try { storage = p.localStorage; } catch (e) {}
+      var audio = p.__bgmAudio;
       try {
-        audio = parentWin.__bgmAudio;
         if (!audio) {
-          audio = parentWin.__bgmAudio = new parentWin.Audio("__MUSIC__");
+          audio = p.__bgmAudio = new p.Audio("__MUSIC__");
           audio.loop = true;
           audio.preload = 'auto';
         }
-      } catch (e) {
-        audio = document.createElement('audio');
-        audio.src = '__MUSIC__';
-        audio.loop = true;
-        document.body.appendChild(audio);
+      } catch (e) { return; }
+      var onLight = __ONLIGHT__;
+      var btn = p.__bgmBtn;
+      if (!btn || !btn.parentNode) {
+        btn = d.createElement('button');
+        btn.type = 'button';
+        btn.id = '__bgmToggleBtn';
+        d.body.appendChild(btn);
+        p.__bgmBtn = btn;
       }
-      var btn = document.getElementById('toggle');
-      var state = document.getElementById('state');
-      var wantPlay = true;
-      try { if (storage) wantPlay = storage.getItem('bgm_on') !== '0'; } catch (e) {}
+      btn.style.cssText = 'position:fixed;left:18px;bottom:18px;z-index:2147483000;' +
+        'border:1px solid #a7f3d0;border-radius:999px;padding:10px 18px;' +
+        'background:rgba(224,250,236,.97);color:#0b7a51;font-size:14px;font-weight:800;' +
+        'cursor:pointer;box-shadow:0 8px 22px rgba(6,80,52,.22);' +
+        (onLight ? '' : '');
+      var want = p.__bgmWant;
+      if (typeof want !== 'boolean') {
+        try { want = storage ? storage.getItem('bgm_on') !== '0' : true; } catch (e) { want = true; }
+      }
+      p.__bgmWant = want;
       function paint() {
-        btn.textContent = wantPlay ? '暂停音乐' : '播放音乐';
-        state.textContent = wantPlay ? (audio.paused ? '点一下页面即可开始播放' : '背景音乐播放中') : '背景音乐已暂停';
+        btn.textContent = want ? '⏸ 暂停音乐' : '▶ 播放音乐';
+        btn.title = want ? '点击暂停背景音乐' : '点击继续播放背景音乐';
       }
       function play() {
-        if (!wantPlay) return;
-        var result = audio.play();
-        if (result && result.then) {
-          result.then(paint).catch(function () {
-            state.textContent = '点一下页面即可开始播放';
-          });
-        }
+        if (!want) return;
+        try {
+          var result = audio.play();
+          if (result && result.then) result.then(paint).catch(function () { paint(); });
+        } catch (e) {}
+        paint();
       }
       function pause() {
-        audio.pause();
+        try { audio.pause(); } catch (e) {}
         paint();
       }
       function persist() {
-        try { if (storage) storage.setItem('bgm_on', wantPlay ? '1' : '0'); } catch (e) {}
+        try { if (storage) storage.setItem('bgm_on', want ? '1' : '0'); } catch (e) {}
       }
-      btn.addEventListener('click', function (e) {
+      function onClick(e) {
         e.preventDefault();
         e.stopPropagation();
-        wantPlay = !wantPlay;
+        want = !want;
+        p.__bgmWant = want;
         persist();
-        if (wantPlay) play(); else pause();
+        if (want) play(); else pause();
         paint();
-      });
-      audio.addEventListener('play', paint);
-      audio.addEventListener('pause', paint);
-      var firstInteraction = function () {
-        if (wantPlay && audio.paused) play();
-      };
-      try { if (parentWin.__bgmCleanup) parentWin.__bgmCleanup(); } catch (e) {}
+      }
+      try { if (p.__bgmCleanup) p.__bgmCleanup(); } catch (e) {}
       function cleanup() {
         try {
-          if (parentDoc) {
-            parentDoc.removeEventListener('pointerdown', firstInteraction, true);
-            parentDoc.removeEventListener('keydown', firstInteraction, true);
-          }
+          btn.removeEventListener('click', onClick);
+          d.removeEventListener('pointerdown', firstInteraction, true);
+          d.removeEventListener('keydown', firstInteraction, true);
         } catch (e) {}
-        document.removeEventListener('pointerdown', firstInteraction, true);
-        document.removeEventListener('keydown', firstInteraction, true);
       }
-      if (parentDoc) {
-        parentDoc.addEventListener('pointerdown', firstInteraction, true);
-        parentDoc.addEventListener('keydown', firstInteraction, true);
-        try { parentWin.__bgmCleanup = cleanup; } catch (e) {}
-      }
-      document.addEventListener('pointerdown', firstInteraction, true);
-      document.addEventListener('keydown', firstInteraction, true);
-      if (wantPlay) { setTimeout(play, 120); } else { audio.pause(); }
+      btn.addEventListener('click', onClick);
+      audio.onplay = paint;
+      audio.onpause = paint;
+      var firstInteraction = function () {
+        if (want && audio.paused) play();
+      };
+      d.addEventListener('pointerdown', firstInteraction, true);
+      d.addEventListener('keydown', firstInteraction, true);
+      p.__bgmCleanup = cleanup;
+      if (want) { setTimeout(play, 120); } else { pause(); }
       paint();
-      setTimeout(paint, 900);
     })();
     </script>
     """
@@ -3124,8 +3123,8 @@ def finalize_matching() -> None:
         st.session_state.stage = "form"
         return
 
-    competition = matcher.normalize_competition_name(
-        str(collected.get("competition", "")).strip(), table
+    competition = _normalize_competition_name(
+        str(collected.get("competition", "")).strip()
     )
     collected["competition"] = competition
     comp_range = matcher.get_competition_range(competition, table)
