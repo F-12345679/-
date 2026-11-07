@@ -268,18 +268,19 @@ class DataPool:
 
     def _write_json(self, path: str, data: Any) -> None:
         """
-        写入数据：云端模式只写 Neon；读取失败后拒绝写入，避免用空数据覆盖云端。
+        写入数据：云端可用时写 Neon；云端不可用时先写本地缓存，保证操作不中断。
         本地模式仍使用“临时文件 + 原子替换”。
         """
         key = neon_store.file_key(path)
         if neon_store.is_configured():
-            if self.cloud_read_failed:
-                raise RuntimeError(
-                    "云端数据读取失败，已停止写入以保护 Neon 中的现有用户和意向。"
-                )
-            if neon_store.save_json(key, data):
+            if not self.cloud_read_failed and neon_store.save_json(key, data):
                 return
-            raise RuntimeError("Neon 写入失败，请检查网络或数据库连接后重试。")
+            print(
+                "[data_pool] Neon 写入失败，先写本地缓存，稍后重试",
+                file=sys.stderr,
+            )
+            self._write_local_fallback(path, data)
+            return
         payload = json.dumps(data, ensure_ascii=False, indent=2)
         last_error: Optional[BaseException] = None
         for attempt in range(5):
@@ -401,39 +402,80 @@ class DataPool:
             records = {}
         return latest, records
 
+    def _write_local_fallback(self, path: str, data: Any) -> bool:
+        """Neon 不可用时先写本地缓存，保证用户操作不被中断。"""
+        payload = json.dumps(data, ensure_ascii=False, indent=2)
+        for attempt in range(2):
+            tmp = "%s.pending.%d" % (path, attempt)
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.write(payload)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, path)
+                return True
+            except OSError:
+                try:
+                    if os.path.exists(tmp):
+                        os.remove(tmp)
+                except OSError:
+                    pass
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(payload)
+            return True
+        except OSError as exc:
+            print("[data_pool] 本地缓存写入失败：%s" % exc, file=sys.stderr)
+            return False
+
     def _save_users(self) -> None:
         if neon_store.is_configured():
-            if self.cloud_read_failed:
-                raise RuntimeError("云端用户读取失败，已停止写入以保护现有账号。")
-            latest, latest_users = self._cloud_latest("users", "users")
-            snapshot = self._users_snapshot or {}
-            if not latest_users and snapshot:
-                raise RuntimeError(
-                    "Neon users 表读取为空，已停止写入，避免覆盖已有用户。"
-                )
-            merged = dict(latest_users)
-            for uid, user in self.users.items():
-                if snapshot.get(uid) != user:
-                    merged_user = copy.deepcopy(user)
-                    if not merged_user.get("avatar"):
-                        latest_user = latest_users.get(uid) or {}
-                        if latest_user.get("avatar"):
-                            merged_user["avatar"] = latest_user["avatar"]
-                    merged[uid] = merged_user
-            for uid in list(snapshot.keys()):
-                if uid not in self.users:
-                    merged.pop(uid, None)
-            next_seq = max(
-                self.next_user_seq,
-                int(latest.get("next_seq", 1) or 1),
-                self._max_seq(merged.keys(), "U") + 1,
-            )
-            payload = {"next_seq": next_seq, "users": merged}
-            if not neon_store.save_json("users", payload):
-                raise RuntimeError("Neon 用户写入失败，请稍后重试。")
-            self.users = merged
-            self.next_user_seq = next_seq
-            self._users_snapshot = copy.deepcopy(merged)
+            saved = False
+            read_failed = False
+            try:
+                latest, latest_users = self._cloud_latest("users", "users")
+                snapshot = self._users_snapshot or {}
+                if latest_users or not snapshot:
+                    merged = dict(latest_users)
+                    for uid, user in self.users.items():
+                        if snapshot.get(uid) != user:
+                            merged_user = copy.deepcopy(user)
+                            if not merged_user.get("avatar"):
+                                latest_user = latest_users.get(uid) or {}
+                                if latest_user.get("avatar"):
+                                    merged_user["avatar"] = latest_user["avatar"]
+                            merged[uid] = merged_user
+                    for uid in list(snapshot.keys()):
+                        if uid not in self.users:
+                            merged.pop(uid, None)
+                    next_seq = max(
+                        self.next_user_seq,
+                        int(latest.get("next_seq", 1) or 1),
+                        self._max_seq(merged.keys(), "U") + 1,
+                    )
+                    payload = {"next_seq": next_seq, "users": merged}
+                else:
+                    raise RuntimeError("Neon users 表读取为空，改用本地缓存")
+            except Exception as exc:
+                print("[data_pool] 用户云端读取失败，使用本地缓存：%s" % exc, file=sys.stderr)
+                read_failed = True
+                payload = {
+                    "next_seq": self.next_user_seq,
+                    "users": copy.deepcopy(self.users),
+                }
+            if read_failed:
+                self._write_local_fallback(self.users_path, payload)
+                self.users = payload["users"]
+                self.next_user_seq = int(payload.get("next_seq", self.next_user_seq) or self.next_user_seq)
+                return
+            saved = neon_store.save_json("users", payload)
+            if not saved:
+                self._write_local_fallback(self.users_path, payload)
+                print("[data_pool] 用户写入 Neon 失败，已写本地缓存，稍后重试", file=sys.stderr)
+            self.users = payload["users"]
+            self.next_user_seq = int(payload.get("next_seq", self.next_user_seq) or self.next_user_seq)
+            if saved:
+                self._users_snapshot = copy.deepcopy(self.users)
             return
         self._write_json(
             self.users_path, {"next_seq": self.next_user_seq, "users": self.users}
@@ -442,32 +484,46 @@ class DataPool:
 
     def _save_intents(self) -> None:
         if neon_store.is_configured():
-            if self.cloud_read_failed:
-                raise RuntimeError("云端意向读取失败，已停止写入以保护现有意向。")
-            latest, latest_intents = self._cloud_latest("intents", "intents")
-            snapshot = self._intents_snapshot or {}
-            if not latest_intents and snapshot:
-                raise RuntimeError(
-                    "Neon intents 表读取为空，已停止写入，避免覆盖已有意向。"
-                )
-            merged = dict(latest_intents)
-            for iid, intent in self.intents.items():
-                if snapshot.get(iid) != intent:
-                    merged[iid] = copy.deepcopy(intent)
-            for iid in list(snapshot.keys()):
-                if iid not in self.intents:
-                    merged.pop(iid, None)
-            next_seq = max(
-                self.next_intent_seq,
-                int(latest.get("next_seq", 1) or 1),
-                self._max_seq(merged.keys(), "I") + 1,
-            )
-            payload = {"next_seq": next_seq, "intents": merged}
-            if not neon_store.save_json("intents", payload):
-                raise RuntimeError("Neon 意向写入失败，请稍后重试。")
-            self.intents = merged
-            self.next_intent_seq = next_seq
-            self._intents_snapshot = copy.deepcopy(merged)
+            read_failed = False
+            try:
+                latest, latest_intents = self._cloud_latest("intents", "intents")
+                snapshot = self._intents_snapshot or {}
+                if latest_intents or not snapshot:
+                    merged = dict(latest_intents)
+                    for iid, intent in self.intents.items():
+                        if snapshot.get(iid) != intent:
+                            merged[iid] = copy.deepcopy(intent)
+                    for iid in list(snapshot.keys()):
+                        if iid not in self.intents:
+                            merged.pop(iid, None)
+                    next_seq = max(
+                        self.next_intent_seq,
+                        int(latest.get("next_seq", 1) or 1),
+                        self._max_seq(merged.keys(), "I") + 1,
+                    )
+                    payload = {"next_seq": next_seq, "intents": merged}
+                else:
+                    raise RuntimeError("Neon intents 表读取为空，改用本地缓存")
+            except Exception as exc:
+                print("[data_pool] 意向云端读取失败，使用本地缓存：%s" % exc, file=sys.stderr)
+                read_failed = True
+                payload = {
+                    "next_seq": self.next_intent_seq,
+                    "intents": copy.deepcopy(self.intents),
+                }
+            if read_failed:
+                self._write_local_fallback(self.intents_path, payload)
+                self.intents = payload["intents"]
+                self.next_intent_seq = int(payload.get("next_seq", self.next_intent_seq) or self.next_intent_seq)
+                return
+            saved = neon_store.save_json("intents", payload)
+            if not saved:
+                self._write_local_fallback(self.intents_path, payload)
+                print("[data_pool] 意向写入 Neon 失败，已写本地缓存，稍后重试", file=sys.stderr)
+            self.intents = payload["intents"]
+            self.next_intent_seq = int(payload.get("next_seq", self.next_intent_seq) or self.next_intent_seq)
+            if saved:
+                self._intents_snapshot = copy.deepcopy(self.intents)
             return
         self._write_json(
             self.intents_path, {"next_seq": self.next_intent_seq, "intents": self.intents}

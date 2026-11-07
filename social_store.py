@@ -186,11 +186,12 @@ class SocialStore:
 
     def _save(self) -> None:
         if neon_store.is_configured():
-            if self.cloud_read_failed:
-                raise RuntimeError("云端数据读取失败，已停止写入以保护现有数据。")
-            if neon_store.save_json(self.key, self.data):
+            if not self.cloud_read_failed and neon_store.save_json(self.key, self.data):
                 return
-            raise RuntimeError("Neon 写入失败，请检查网络或数据库连接后重试。")
+            print(
+                "[social_store] Neon 写入失败，先写本地缓存，稍后重试",
+                file=sys.stderr,
+            )
         payload = json.dumps(self.data, ensure_ascii=False, indent=2)
         last_error: Optional[BaseException] = None
         for attempt in range(5):

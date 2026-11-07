@@ -1931,15 +1931,15 @@ def _direct_unread_count(user_id: str, peer_id: str) -> int:
 
 
 def _friend_unread_count(user_id: str, peer_id: str) -> int:
-    total = _direct_unread_count(user_id, peer_id)
+    # 与好友聊天页保持一致：已同意组队时只看队伍消息，否则只看私聊消息。
     for inv in _accepted_invitations(user_id):
         other = inv.get("to_user") if inv.get("from_user") == user_id else inv.get("from_user")
         if other != peer_id:
             continue
         _, my_iid, other_iid = _opposite(inv, user_id)
         if my_iid and other_iid:
-            total += _pair_unread_count(user_id, my_iid, other_iid)
-    return total
+            return _pair_unread_count(user_id, my_iid, other_iid)
+    return _direct_unread_count(user_id, peer_id)
 
 
 def _friend_unread_total(user_id: str) -> int:
