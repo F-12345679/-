@@ -1955,15 +1955,46 @@ def _group_unread_total(user_id: str) -> int:
     )
 
 
+def _new_registered_user_ids(intent: dict, user_id: str = "") -> set:
+    """匹配之后新注册、且与自己同比赛的用户（用于历史红点）。"""
+    iid = intent.get("intent_id", "")
+    snapshot = store.get_snapshot(iid) or {}
+    saved_at = str(snapshot.get("saved_at") or "")
+    if not saved_at:
+        return set()
+    host_uid = user_id or intent.get("user_id") or current_uid
+    host_comp = _normalize_competition_name(intent.get("competition") or "")
+    seen_users = {
+        x.get("user_id")
+        for x in (snapshot.get("candidates") or [])
+        if x.get("user_id")
+    }
+    teamed = _teamed_user_ids(host_uid)
+    ids = set()
+    for cand in pool.list_matching_intents():
+        if cand.get("intent_id") == iid:
+            continue
+        uid = cand.get("user_id")
+        if not uid or uid == host_uid or uid in seen_users or uid in teamed:
+            continue
+        if _normalize_competition_name(cand.get("competition") or "") != host_comp:
+            continue
+        cand_user = pool.get_user(uid) or {}
+        created = str(cand_user.get("created_at") or "")
+        if created and created > saved_at:
+            ids.add(uid)
+    return ids
+
+
 def _history_unread_total(user_id: str) -> int:
     total = 0
     for intent in pool.list_user_intents(user_id):
         if intent.get("status") == "deleted":
             continue
         iid = intent.get("intent_id", "")
-        new_items = _new_candidates_for(intent, user_id)
+        new_count = len(_new_registered_user_ids(intent, user_id))
         seen = store.history_seen_count(user_id, iid)
-        total += max(0, len(new_items) - seen)
+        total += max(0, new_count - seen)
     return total
 
 
@@ -3301,7 +3332,6 @@ def finalize_matching() -> None:
     }
     intent_id = pool.create_intent(user_id, intent_data)
 
-    pool.expire_intents()
     inverted = pool.build_inverted_index()
     result = matcher.find_candidates(
         pool.get_intent(intent_id),
@@ -3485,29 +3515,6 @@ def render_match_results() -> None:
         % (result.get("candidates_checked", 0), result.get("index_hits", 0))
     )
 
-    diagnostics = result.get("diagnostics", [])
-    with st.expander("为什么没匹配到（逐条硬约束）"):
-        if not diagnostics:
-            st.caption("本次所有候选人都通过了硬约束。")
-        else:
-            for diag in diagnostics[:30]:
-                st.markdown(
-                    "**%s** · %s"
-                    % (
-                        _esc(diag.get("nickname") or "未命名"),
-                        _esc(
-                            _competition_display(diag.get("competition") or "")
-                            or "未填写"
-                        ),
-                    )
-                )
-                for check in diag.get("checks", []):
-                    mark = "✅" if check.get("passed") else "❌"
-                    line = "%s %s" % (mark, check.get("name", ""))
-                    if check.get("detail"):
-                        line += "：" + str(check.get("detail"))
-                    st.write(line)
-
     host_intent_id = st.session_state.get("host_intent_id")
     recommended = _dedupe_items_by_user(result.get("recommended", []))
     recommended_users = {x.get("user_id") for x in recommended}
@@ -3564,19 +3571,15 @@ def _new_candidates_for(intent: dict, user_id: str = ""):
     if intent.get("status") not in ("matching", "teamed"):
         return []
     uid = user_id or intent.get("user_id") or current_uid
-    snapshot = store.get_snapshot(intent.get("intent_id", ""))
-    seen = {x.get("intent_id") for x in snapshot.get("candidates", [])}
-    teamed = _teamed_user_ids(uid)
+    new_ids = _new_registered_user_ids(intent, uid)
+    if not new_ids:
+        return []
     mapping = _current_match_map(intent.get("intent_id", ""))
-    fresh = []
-    for iid, item in mapping.items():
-        if iid in seen:
-            continue
-        if float(item.get("score", 0)) <= 0:
-            continue
-        if item.get("user_id") in teamed:
-            continue
-        fresh.append(item)
+    fresh = [
+        item
+        for item in mapping.values()
+        if item.get("user_id") in new_ids
+    ]
     return _dedupe_items_by_user(fresh)
 
 
@@ -3630,14 +3633,14 @@ def render_history_detail() -> None:
     mapping = _current_match_map(intent_id)
     seen_ids = {x.get("intent_id") for x in records}
     seen_users = {x.get("user_id") for x in records}
-    teamed = _teamed_user_ids(current_uid)
+    new_registered_ids = _new_registered_user_ids(intent, current_uid)
     fresh = _dedupe_items_by_user(
         [
             item
             for iid, item in mapping.items()
             if iid not in seen_ids
             and item.get("user_id") not in seen_users
-            and item.get("user_id") not in teamed
+            and item.get("user_id") in new_registered_ids
         ]
     )
 
@@ -3649,8 +3652,13 @@ def render_history_detail() -> None:
             unsafe_allow_html=True,
         )
         st.caption(
-            "已有 %s 人 · 历史匹配 %d 位 · 新加入 %d 位"
-            % (intent.get("team_size", 1), len(records), len(fresh))
+            "已有 %s 人 · 历史匹配 %d 位 · 匹配后新注册同比赛 %d 位（其中 %d 位符合当前硬约束）"
+            % (
+                intent.get("team_size", 1),
+                len(records),
+                len(new_registered_ids),
+                len(fresh),
+            )
         )
     with header_right:
         if st.button("关闭匹配记录", key="hist_close", use_container_width=True):
@@ -3690,7 +3698,7 @@ def render_history_detail() -> None:
 
     show_records("历史匹配的伙伴", records)
     show_records("最近新加入、符合要求的伙伴", fresh)
-    store.mark_history_seen(current_uid, intent_id, len(fresh))
+    store.mark_history_seen(current_uid, intent_id, len(new_registered_ids))
 
 
 def render_history_section() -> None:
@@ -3722,7 +3730,7 @@ def render_history_section() -> None:
         unique_intents.append(intent)
     for intent in unique_intents:
         iid = intent.get("intent_id", "")
-        new_items = _new_candidates_for(intent)
+        new_count = len(_new_registered_user_ids(intent))
         comp_range = _competition_range_for(intent)
         try:
             base_size = int(intent.get("team_size") or 1)
@@ -3752,14 +3760,14 @@ def render_history_section() -> None:
             snapshot = store.get_snapshot(iid) or {}
             record_count = len(snapshot.get("candidates", []) or [])
             st.caption(
-                "历史匹配记录：%d 位 · 当前可匹配：%d 位"
-                % (record_count, len(new_items))
+                "历史匹配记录：%d 位 · 匹配后新注册同比赛：%d 位"
+                % (record_count, new_count)
             )
             seen_count = store.history_seen_count(current_uid, iid)
-            unseen = max(0, len(new_items) - seen_count)
+            unseen = max(0, new_count - seen_count)
             if unseen:
                 st.markdown(
-                    '<span class="new-dot">🔴 最近有新人数更新：%d 位符合要求、匹配度高的新伙伴</span>'
+                    '<span class="new-dot">🔴 匹配后新注册同比赛用户：%d 位</span>'
                     % unseen,
                     unsafe_allow_html=True,
                 )
